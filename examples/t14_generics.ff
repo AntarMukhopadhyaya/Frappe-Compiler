@@ -1,0 +1,43 @@
+fn identity<T>(x: T) -> T {
+    return x;
+}
+
+fn first<A, B>(a: A, b: B) -> A {
+    return a;
+}
+
+fn wrap<T>(x: T) -> [T] {
+    let arr: [T] = [x];
+    return arr;
+}
+
+fn pick<T>(xs: [T]) -> T {
+    return xs[0];
+}
+
+fn duplicate<T>(x: T) -> T {
+    return identity(x);           // T flows into identity's type param
+}
+
+fn wrap_via<T>(x: T) -> [T] {
+    return wrap(x);               // T flows into wrap's type param
+}
+
+fn main() {
+    let a: Int = identity(1);            // identity$Int
+    let b: String = identity("hi");      // identity$String
+    let c: Int = identity(1);            // cache hit — same instance as `a`
+    let d: Int = identity(identity(5));  // nested call, identity$Int again
+
+    let p: Int = first(1, "hello");      // first$Int$String
+    let q: String = first("x", 2);       // first$String$Int
+
+    let arr: [Int] = wrap(42);           // wrap$Int
+    let back: Int = pick(arr);           // pick$Int
+
+    let dup1: Int = duplicate(7);        // duplicate$Int    → calls identity$Int (cache hit)
+    let dup2: String = duplicate("yo");  // duplicate$String → calls identity$String (cache hit)
+    let wid: [Float] = wrap_via(1.5);    // wrap_via$Float   → calls wrap$Float (NEW instance)
+
+    return;
+}

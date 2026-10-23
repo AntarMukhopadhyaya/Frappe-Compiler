@@ -1,0 +1,17 @@
+fn add(a: Int, b: Int) -> Int {
+    return a + b;
+}
+
+fn main() {
+    let a: Int = 5;
+    let b: Int = "hello";           // error: Int vs String
+    let c = add(a);                  // error: expects 2 args, got 1
+    let d = add(a, "world");         // error: arg 2 Int vs String
+    let e = 5 + "hi";                // error: + requires numeric or string+string
+    let f: Bool = 5 > "hi";          // error: comparison requires numeric
+    let g: Bool = 5 && true;         // error: && requires Bool
+    let h: Int = !true;              // error: ! requires Bool, result assignable Int
+    let i: Int = add(a, a) * 2;
+    add(a, a) = 5;                   // error: left side not assignable
+    // 5 = 10;                        // error: not an lvalue
+}

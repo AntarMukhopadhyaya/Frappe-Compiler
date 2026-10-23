@@ -1,0 +1,22 @@
+fn takes_int(x: Int) -> Int {
+    return x;
+}
+
+fn main() {
+    let a: Int = 5;
+    let b = takes_int(a);
+    let c = unknown_thing;
+    let d: UnknownType = a;
+    let takes_int = 10;
+}
+
+fn dup_function() { }
+fn dup_function() { }        // ← duplicate in module scope
+
+
+fn outside() {
+    let p = this;
+    let q = super;
+}
+
+

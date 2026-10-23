@@ -1,0 +1,22 @@
+
+
+
+class Point {
+    x: Float;
+    y: Float;
+
+    fn init(x: Float, y: Float) {
+        this.x = x;
+        this.y = y;
+    }
+
+    fn sum() -> Float {
+        return this.x + this.y;
+    }
+}
+
+fn main() {
+    let p = new Point(1.0, 2.0);
+    let s = p.sum();
+    return;
+}

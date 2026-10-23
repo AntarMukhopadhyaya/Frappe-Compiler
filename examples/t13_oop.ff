@@ -1,0 +1,40 @@
+class Point {
+    x: Float;
+    y: Float;
+
+    fn init(x: Float, y: Float) {
+        this.x = x;
+        this.y = y;
+    }
+
+    fn sum() -> Float {
+        return this.x + this.y;
+    }
+}
+
+class Circle extends Point {
+    radius: Float;
+
+    fn init(x: Float, y: Float, r: Float) {
+        super.init(x, y);
+        this.radius = r;
+    }
+
+    fn area() -> Float {
+        return 3.14 * this.radius * this.radius;
+    }
+}
+
+fn main() {
+    let p = new Point(1.0, 2.0);
+    let s = p.sum();
+    let c = new Circle(0.0, 0.0, 5.0);
+    let a = c.area();
+    let total = c.sum();       // inherited through Circle→Point
+
+    let bad1 = p.nonexistent;  // error: no member
+    let bad2 = p.sum;          // error: method must be called
+    let bad3 = new Point();    // error: init expects 2 args
+    let bad4 = p.sum(1.0);     // error: sum expects 0 args
+    let bad5 = new Circle(1.0);// error: Circle.init expects 3 args
+}

@@ -1,0 +1,91 @@
+# Build directories
+/build/
+/build-*/
+/cmake-build-*/
+/out/
+/Debug/
+/Release/
+
+# Compiled binaries and libraries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.pch
+*.gch
+*.gcda
+*.gcno
+*.profraw
+*.profdata
+
+# CMake generated files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+build.ninja
+.ninja_deps
+.ninja_log
+Testing/
+
+# CMake local configuration
+compile_commands.json
+CMakeUserPresets.json
+
+# LLVM / compiler artifacts
+*.ll
+*.bc
+*.mir
+*.o.tmp
+*.prof
+*.dSYM/
+
+# Frappe compiler and test artifacts
+*.frappe.tmp
+test-output/
+test-results/
+coverage/
+coverage.*
+
+# CLion / JetBrains
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+
+# Caches and local tooling
+.cache/
+.cxx/
+.clangd/
+.clang-tidy-cache/
+
+# Sanitizers and debugging
+core
+core.*
+*.stackdump
+
+# OS cruft
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editor temporary files
+*.swp
+*.swo
+*~
+.#*
+\#*\#
+
+# Environment files
+.env
+.env.*
+!.env.example

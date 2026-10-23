@@ -1,0 +1,38 @@
+class Allocator {
+    fn init() { }
+}
+
+class Point {
+    x: Float;
+    y: Float;
+
+    fn init(alloc: Allocator, x: Float, y: Float) {
+        this.x = x;
+        this.y = y;
+    }
+
+    fn deinit(alloc: Allocator) { }
+}
+
+class BadInitReturn {
+    fn init(alloc: Allocator, x: Float) -> Int { return 0; }
+}
+
+class BadInitStatic {
+    static fn init(alloc: Allocator, x: Float) { }
+}
+
+class BadDeinitParams {
+    fn deinit() { }
+}
+
+class BadDeinitReturn {
+    fn deinit(alloc: Allocator) -> Int { return 0; }
+}
+
+fn main() {
+    let alloc = new Allocator();
+    let p = new Point(alloc, 1.0, 2.0);
+    p.deinit(alloc);
+    return;
+}

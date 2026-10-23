@@ -1,0 +1,16 @@
+fn add(a: Int, b: Int) -> Int {
+    return a + b;
+}
+
+fn main() {
+    let a: Int = 5;
+    let b: Int = "hello";
+    let c = add(a);
+    let d = add(a, "world");
+    let e = 5 + "hi";
+    let f: Bool = 5 > "hi";
+    let g: Bool = 5 && true;
+    let h: Int = !true;
+    let i: Int = add(a, a) * 2;
+    add(a, a) = 5;
+}
