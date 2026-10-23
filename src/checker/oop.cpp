@@ -26,13 +26,13 @@ namespace frappe::checker::detail {
         }
     }
 
-    const ast::ClassDecl *get_base_class(Checker *c, const ast::ClassDecl *cd) {
+    const ast::ClassDecl *get_base_class(const Checker *c, const ast::ClassDecl *cd) {
         if (!cd->base) return nullptr;
-        auto *ty = resolve_ast_type(c, cd->base);
-        if (!ty || ty->kind != TypeKind::Named) return nullptr;
-        auto *nt = static_cast<const types::NamedType *>(ty);
-        if (nt->decl.kind != types::NamedDeclKind::Class) return nullptr;
-        return nt->decl.class_;
+        if (cd->base->kind != ast::TypeKind::Named) return nullptr;
+        auto *nt = static_cast<const ast::NamedType *>(cd->base);
+        auto *sym = resolver::lookup(c->resolver_, nt);
+        if (!sym || sym->kind != resolver::SymbolKind::Class) return nullptr;
+        return sym->decl.class_;
     }
 
     const ast::FieldDecl *find_field(Checker *c, const ast::ClassDecl *start,
@@ -263,14 +263,44 @@ namespace frappe::checker::detail {
 
         auto *nt = static_cast<const types::NamedType *>(obj_ty);
 
-        if (nt->decl.kind != types::NamedDeclKind::Class) {
-            diagnostics::report_error(
-                c->diag, call->span,
-                "method call requires a class");
-
-            for (auto *arg: call->args) {
-                static_cast<void>(check_expr(c, arg));
+        if (nt->decl.kind == types::NamedDeclKind::Interface) {
+            auto *iface = nt->decl.interface_;
+            const ast::FnDecl *method = nullptr;
+            for (auto *m: iface->methods) {
+                if (m->name.text == me->name.text) {
+                    method = m;
+                    break;
+                }
             }
+            if (!method) {
+                diagnostics::report_error(c->diag, me->name.span,
+                                          "interface '{}' has no method '{}'",
+                                          iface->name.text, me->name.text);
+                for (auto *arg: call->args) static_cast<void>(check_expr(c, arg));
+                return bind_expr(c, call, c->store.error_type);
+            }
+            if (call->args.size() != method->params.size()) {
+                diagnostics::report_error(c->diag, call->span,
+                                          "'{}' expects {} arguments, got {}",
+                                          me->name.text, method->params.size(),
+                                          call->args.size());
+                for (auto *arg: call->args) static_cast<void>(check_expr(c, arg));
+                return bind_expr(c, call,
+                                 resolve_ast_type(c, method->return_type));
+            }
+            for (std::size_t i = 0; i < call->args.size(); ++i) {
+                auto *at = check_expr(c, call->args[i]);
+                auto *pt = resolve_ast_type(c, method->params[i]->type_);
+                check_assignable(c, pt, at, call->args[i]->span);
+            }
+            return bind_expr(c, call, resolve_ast_type(c, method->return_type));
+        }
+
+        // Enum types still have no method calls.
+        if (nt->decl.kind == types::NamedDeclKind::Enum) {
+            diagnostics::report_error(c->diag, call->span,
+                                      "method call requires a class or interface");
+            for (auto *arg: call->args) static_cast<void>(check_expr(c, arg));
             return bind_expr(c, call, c->store.error_type);
         }
 
@@ -407,7 +437,7 @@ namespace frappe::checker::detail {
         return bind_expr(c, ne, ty);
     }
 
-    [[nodiscard]] bool is_subclass(Checker *c,
+    [[nodiscard]] bool is_subclass(const Checker *c,
                                    const ast::ClassDecl *derived,
                                    const ast::ClassDecl *base) {
         if (derived == nullptr) return false;

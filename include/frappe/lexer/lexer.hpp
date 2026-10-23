@@ -47,7 +47,7 @@ namespace frappe::lexer {
     [[nodiscard]] std::span<const syntax::Token> tokenize(Lexer* l);
 
     [[nodiscard]] constexpr bool is_alpha(char c) noexcept {
-        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
     }
     [[nodiscard]] constexpr bool is_digit(char c) noexcept {
         return c >= '0' && c <= '9';

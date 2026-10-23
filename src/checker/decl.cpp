@@ -155,6 +155,107 @@ namespace frappe::checker::detail {
             else out += "Void";
         }
 
+        const ast::InterfaceDecl *get_interface_from_type(const Checker *c, const ast::Type *t) {
+            if (!t) return nullptr;
+            if (t->kind != ast::TypeKind::Named) return nullptr;
+            auto *nt = static_cast<const ast::NamedType *>(t);
+            auto *sym = resolver::lookup(c->resolver_, nt);
+            if (!sym || sym->kind != resolver::SymbolKind::Interface) return nullptr;
+            return sym->decl.interface_;
+        }
+
+        void check_interface_decl(Checker *c, const ast::InterfaceDecl *id) {
+            if (!id->type_params.empty()) {
+                diagnostics::report_error(c->diag, id->name.span,
+                                          "generic interfaces not supported in v1");
+            }
+            for (auto *base: id->bases) {
+                diagnostics::report_error(c->diag, base->span,
+                                          "interface inheritance not supported in v1 "
+                                          "(list each parent interface on the implementing class)");
+            }
+            for (auto *m: id->methods) {
+                if (m->body) {
+                    diagnostics::report_error(c->diag, m->name.span,
+                                              "interface method '{}' cannot have a body", m->name.text);
+                }
+                if (m->is_static) {
+                    diagnostics::report_error(c->diag, m->name.span,
+                                              "interface method '{}' cannot be static", m->name.text);
+                }
+                if (!m->type_params.empty()) {
+                    diagnostics::report_error(c->diag, m->name.span,
+                                              "interface method '{}' cannot be generic", m->name.text);
+                }
+                if (m->name.text == frappe::syntax::INIT_NAME) {
+                    diagnostics::report_error(c->diag, m->name.span,
+                                              "'init' cannot appear in an interface");
+                }
+                if (m->name.text == frappe::syntax::DEINIT_NAME) {
+                    diagnostics::report_error(c->diag, m->name.span,
+                                              "'deinit' cannot appear in an interface");
+                }
+            }
+        }
+
+        void check_implements(Checker *c, const ast::ClassDecl *cd) {
+            std::pmr::unordered_set<const ast::InterfaceDecl *> own_seen{c->mr};
+            for (auto *iface_ty: cd->interfaces) {
+                if (iface_ty->kind == ast::TypeKind::Applied) {
+                    diagnostics::report_error(c->diag, iface_ty->span,
+                                              "generic interfaces not supported in v1");
+                    continue;
+                }
+                auto *iface = get_interface_from_type(c, iface_ty);
+                if (!iface) {
+                    std::pmr::string name{c->mr};
+                    append_ast_type_name(name, iface_ty);
+                    diagnostics::report_error(c->diag, iface_ty->span,
+                                              "'{}' is not an interface", name);
+                    continue;
+                }
+                if (own_seen.contains(iface)) {
+                    diagnostics::report_error(c->diag, iface_ty->span,
+                                              "class '{}' implements interface '{}' more than once",
+                                              cd->name.text, iface->name.text);
+                    continue;
+                }
+                own_seen.insert(iface);
+            }
+            if (cd->is_abstract) return;
+            // collect every interface from the inheritance chain, deduped
+            std::pmr::vector<const ast::InterfaceDecl *> all_ifaces{c->mr};
+            std::pmr::unordered_set<const ast::InterfaceDecl *> seen{c->mr};
+            for (const ast::ClassDecl *walk = cd; walk; walk = get_base_class(c, walk)) {
+                for (auto *iface_ty: walk->interfaces) {
+                    auto *iface = get_interface_from_type(c, iface_ty);
+                    if (!iface) continue;
+                    if (seen.contains(iface)) continue;
+                    seen.insert(iface);
+                    all_ifaces.push_back(iface);
+                }
+            }
+            for (auto *iface: all_ifaces) {
+                for (auto *req: iface->methods) {
+                    auto *impl = find_method(c, cd, req->name.text);
+                    if (!impl) {
+                        diagnostics::report_error(c->diag, cd->name.span,
+                                                  "class '{}' does not implement interface '{}' method '{}'",
+                                                  cd->name.text, iface->name.text, req->name.text);
+                    } else if (!signatures_match(req, impl)) {
+                        std::pmr::string expected{c->mr}, got{c->mr};
+                        append_fn_signature(expected, req);
+                        append_fn_signature(got, impl);
+                        diagnostics::report_error(c->diag, impl->name.span,
+                                                  "class '{}' method '{}' has incompatible signature "
+                                                  "with interface '{}'; expected '{}', got '{}'",
+                                                  cd->name.text, req->name.text, iface->name.text,
+                                                  expected, got);
+                    }
+                }
+            }
+        }
+
         void check_var_decl(Checker *c, const ast::VarDecl *vd) {
             if (vd->type_) {
                 auto *declared = resolve_ast_type(c, vd->type_);
@@ -219,10 +320,9 @@ namespace frappe::checker::detail {
                         diagnostics::report_error(c->diag, method->name.span,
                                                   "'deinit' cannot be generic");
                     }
-                    // Variant B (recommended): deinit(alloc) — exactly one parameter.
-                    if (method->params.size() != 1) {
+                    if (!method->params.empty()) {
                         diagnostics::report_error(c->diag, method->name.span,
-                                                  "'deinit' must take exactly one parameter (the allocator), got {}",
+                                                  "'deinit' must take no parameters, got {}",
                                                   method->params.size());
                     }
                 }
@@ -326,6 +426,7 @@ namespace frappe::checker::detail {
                                               "'deinit' cannot be abstract");
                 }
             }
+            check_implements(c,cd);
             if (!cd->is_abstract && cd->base) {
                 // Build the inheritance chain root-first: [root, ..., cd].
                 std::pmr::vector<const ast::ClassDecl *> chain{c->mr};
@@ -427,6 +528,8 @@ namespace frappe::checker::detail {
             case ast::DeclKind::Class: check_class_decl(c, static_cast<const ast::ClassDecl *>(d));
                 break;
             case ast::DeclKind::Interface:
+                check_interface_decl(c, static_cast<const  ast::InterfaceDecl *>(d));
+                break;
             case ast::DeclKind::Enum:
             case ast::DeclKind::Import:
                 break;

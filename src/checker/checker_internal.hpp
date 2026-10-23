@@ -61,7 +61,7 @@ namespace frappe::checker::detail {
     }
 
 
-    [[nodiscard]] const ast::ClassDecl *get_base_class(Checker *c, const ast::ClassDecl *cd);
+    [[nodiscard]] const ast::ClassDecl *get_base_class(const Checker *c, const ast::ClassDecl *cd);
 
     [[nodiscard]] const ast::FieldDecl *find_field(Checker *c, const ast::ClassDecl *start, std::string_view name);
 
@@ -75,7 +75,7 @@ namespace frappe::checker::detail {
                                                ast::Visibility vis,
                                                std::string_view kind);
 
-    [[nodiscard]] bool is_subclass(Checker *c,
+    [[nodiscard]] bool is_subclass(const Checker *c,
                                    const ast::ClassDecl *derived,
                                    const ast::ClassDecl *base);
 

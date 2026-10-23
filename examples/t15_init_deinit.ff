@@ -11,7 +11,7 @@ class Point {
         this.y = y;
     }
 
-    fn deinit(alloc: Allocator) { }
+    fn deinit() { }
 }
 
 class BadInitReturn {
@@ -22,12 +22,10 @@ class BadInitStatic {
     static fn init(alloc: Allocator, x: Float) { }
 }
 
-class BadDeinitParams {
-    fn deinit() { }
-}
+
 
 class BadDeinitReturn {
-    fn deinit(alloc: Allocator) -> Int { return 0; }
+    fn deinit() -> Int { return 0; }
 }
 
 fn main() {

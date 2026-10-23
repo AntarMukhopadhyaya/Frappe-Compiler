@@ -24,6 +24,7 @@ namespace frappe::mir {
     struct MirMethod {
         std::string_view name;
         std::string_view fn_name;
+        std::optional<std::uint32_t> vtable_slot = std::nullopt;
     };
 
     // Class metadata — one entry per class in MirModule::classes.
@@ -38,10 +39,10 @@ namespace frappe::mir {
         std::optional<std::string_view> base_name; // for inheritance
         std::pmr::vector<MirField> fields;
         std::pmr::vector<MirMethod> methods;
-        bool has_init; // ← not init_name
-        bool has_deinit; // ← not deinit_name
-
-        bool has_vtable; // v1: always false
+        bool has_init;
+        bool has_deinit;
+        std::pmr::vector<std::string_view> vtable_slots;
+        bool has_vtable;
         bool is_final;
         bool is_abstract;
     };

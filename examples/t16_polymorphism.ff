@@ -1,0 +1,25 @@
+interface Greeter {
+    fn greet() -> Int;
+}
+
+class Hello implements Greeter {
+    fn greet() -> Int {
+        return 7;
+    }
+}
+
+class Goodbye implements Greeter {
+    fn greet() -> Int {
+        return 3;
+    }
+}
+
+fn call_greet(g: Greeter) -> Int {
+    return g.greet();
+}
+
+fn main() -> Int {
+    let h = new Hello();
+    let g = new Goodbye();
+    return call_greet(h) * 10 + call_greet(g);
+}

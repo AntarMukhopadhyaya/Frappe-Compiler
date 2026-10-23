@@ -174,15 +174,22 @@ namespace frappe::mir {
                         write_dest(out, fn, *i.destination);
                         out += " = ";
                     }
-                    out += "call ";
-                    std::visit([&](const auto &c) {
-                        using C = std::decay_t<decltype(c)>;
+                    if (i.is_virtual) {
+                        out += "vcall [slot ";
+                        out += std::to_string(*i.vtable_slot);
+                        out += "] ";
+                    } else {
+                        out += "call ";
+                    }
+                    std::visit([&]<typename T0>(const T0 &c) {
+                        using C = std::decay_t<T0>;
                         if constexpr (std::is_same_v<C, MirDirectCallee>) {
                             out += c.name;
                         } else {
                             write_value(out, fn, c);
                         }
                     }, i.callee);
+
                     write_call_args(out, fn, i.args);
                 } else if constexpr (std::is_same_v<T, MirReturn>) {
                     out += "return";

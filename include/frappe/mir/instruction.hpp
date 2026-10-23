@@ -84,6 +84,8 @@ namespace frappe::mir {
         std::optional<MirTemp> destination; // nullopt for void returing calls
         MirCallee callee;
         std::pmr::vector<MirValue> args;
+        bool is_virtual = false;
+        std::optional<std::uint32_t> vtable_slot = std::nullopt;
     };
 
     struct MirReturn {

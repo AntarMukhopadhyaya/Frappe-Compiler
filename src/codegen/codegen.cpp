@@ -295,10 +295,17 @@ namespace frappe::codegen::detail {
         for (auto &mc: ctx.mir->classes) {
             auto *info = find_class_info(ctx, mc.name);
             std::vector<llvm::Type *> field_tys;
-            field_tys.reserve(mc.fields.size());
+            field_tys.reserve(1 + mc.fields.size());
+            // vptr at field 0, for every class. Uniform layout
+            // across the hierarchy means `let a: Base = new Derived()` works
+            // regardless of whether Base or any intermediate class declares
+            // an interface. Classes without interfaces get a null vptr
+            // written by handle_new_object — inert because the checker
+            // prevents virtual calls through them.
+            field_tys.push_back(ctx.builder.getPtrTy());
             for (auto &f: mc.fields) {
                 field_tys.push_back(llvm_type(ctx, f.type));
-                info->field_index[f.name] = f.index;
+                info->field_index[f.name] = f.index + 1;
             }
             info->type->setBody(field_tys, /*isPacked=*/false);
 
@@ -331,6 +338,42 @@ namespace frappe::codegen::detail {
                     fn->getArg(static_cast<unsigned>(i))->setName(to_ref(local.name));
             }
             ctx.functions.emplace(std::string_view(fn->getName().data(), fn->getName().size()), fn);
+        }
+    }
+
+    void emit_vtables(CodegenContext &ctx) {
+        for (auto &mc: ctx.mir->classes) {
+            if (!mc.has_vtable) continue;;
+            auto *info = find_class_info(ctx, mc.name);
+            std::vector<llvm::Constant *> entries;
+            entries.reserve(mc.vtable_slots.size());
+            for (auto slot_name: mc.vtable_slots) {
+                if (slot_name.empty()) {
+                    entries.push_back(
+                        llvm::ConstantPointerNull::get(ctx.builder.getPtrTy()));
+                    continue;
+                }
+                auto *fn = find_function(ctx, slot_name);
+                if (!fn) {
+                    diagnostics::report_error(ctx.diag, {},
+                                              "codegen: vtable slot for class '{}' references "
+                                              "unknown function '{}'", mc.name, slot_name);
+                    entries.push_back(
+                        llvm::ConstantPointerNull::get(ctx.builder.getPtrTy()));
+                    continue;
+                }
+                entries.push_back(fn);
+            }
+            auto *arr_ty = llvm::ArrayType::get(ctx.builder.getPtrTy(), entries.size());
+            auto *arr_init = llvm::ConstantArray::get(arr_ty, entries);
+            std::string gv_name = std::string(mc.name) + ".vtable";
+            auto *gv = new llvm::GlobalVariable(
+                ctx.mod, arr_ty,
+                /*isConstant*/true,
+                llvm::GlobalValue::InternalLinkage,
+                arr_init,
+                gv_name);
+            info->vtable_global = gv;
         }
     }
 
@@ -391,6 +434,7 @@ namespace frappe::codegen {
         emit_runtime_decls(ctx);
         emit_classes(ctx);
         declare_functions(ctx);
+        emit_vtables(ctx);
 
         for (auto &mfn: mir.functions) {
             auto *fn = find_function(ctx, mfn.name);

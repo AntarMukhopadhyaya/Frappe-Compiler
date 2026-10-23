@@ -232,7 +232,53 @@ namespace frappe::codegen::detail {
             store_temp(ctx, x.destination, result);
         }
 
+        void handle_virtual_call(CodegenContext &ctx, const mir::MirCall &x) {
+            if (x.args.empty() || !x.vtable_slot) {
+                diagnostics::report_error(ctx.diag, {},
+                                          "codegen: virtual call missing receiver or vtable_slot");
+                if (x.destination)
+                    store_temp(ctx, *x.destination,
+                               llvm::UndefValue::get(ctx.state.temp_slots[x.destination->index]
+                                   ->getAllocatedType()));
+                return;
+            }
+            // args[0] is the receiver.
+            auto *receiver = load_value(ctx, x.args[0]);
+            auto *vptr = ctx.builder.CreateLoad(ctx.builder.getPtrTy(), receiver, "vptr");
+            auto *slot_ptr = ctx.builder.CreateInBoundsGEP(
+                ctx.builder.getPtrTy(), vptr,
+                ctx.builder.getInt64(*x.vtable_slot), "vslot");
+            auto *fn_ptr = ctx.builder.CreateLoad(ctx.builder.getPtrTy(), slot_ptr, "vfn");
+
+            // Build the function signature: receiver first, then actual args.
+            std::vector<llvm::Type *> arg_types;
+            std::vector<llvm::Value *> arg_values;
+            arg_types.reserve(x.args.size());
+            arg_values.reserve(x.args.size());
+            for (auto &a: x.args) {
+                arg_values.push_back(load_value(ctx, a));
+                auto *t = mir_type_of_value(ctx, a);
+                arg_types.push_back(t ? llvm_type(ctx, t) : ctx.builder.getPtrTy());
+            }
+
+            llvm::Type *ret_ty = ctx.builder.getVoidTy();
+            if (x.destination) {
+                auto &temps = ctx.state.mir_fn->temp_types;
+                if (x.destination->index < temps.size() && temps[x.destination->index]) {
+                    ret_ty = llvm_type(ctx, temps[x.destination->index]);
+                }
+            }
+
+            auto *ft = llvm::FunctionType::get(ret_ty, arg_types, false);
+            auto *call = ctx.builder.CreateCall(ft, fn_ptr, arg_values);
+            if (x.destination) store_temp(ctx, *x.destination, call);
+        }
+
         void handle_call(CodegenContext &ctx, const mir::MirCall &x) {
+            if (x.is_virtual) {
+                handle_virtual_call(ctx, x);
+                return;
+            }
             if (!std::holds_alternative<mir::MirDirectCallee>(x.callee))
                 FRAPPE_UNREACHABLE({}, "codegen: indirect calls not supported in v1");
 
@@ -288,6 +334,18 @@ namespace frappe::codegen::detail {
                 ctx.rt_alloc,
                 {ctx.builder.getInt64(static_cast<std::uint64_t>(size.getFixedValue()))},
                 "obj");
+            //  initialize the vptr at struct offset 0. Every class has
+            // the field (layout uniformity), but only classes with interfaces have
+            // an actual vtable global. Others get null — the checker prevents
+            // virtual dispatch through them, so the null is inert.
+            llvm::Constant *vtable_val;
+            if (info->vtable_global) {
+                vtable_val = info->vtable_global; // GlobalVariable* → Constant* implicit
+            } else {
+                vtable_val = llvm::ConstantPointerNull::get(ctx.builder.getPtrTy());
+            }
+            auto *vptr_slot = ctx.builder.CreateStructGEP(info->type, mem, 0, "vptr_slot");
+            ctx.builder.CreateStore(vtable_val, vptr_slot);
 
             if (!info->init_fn_name.empty()) {
                 if (auto *init_fn = find_function(ctx, info->init_fn_name)) {

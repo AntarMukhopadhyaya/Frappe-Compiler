@@ -149,6 +149,23 @@ namespace frappe::checker {
             return c->store.error_type;
         }
 
+        bool class_implements(const Checker *c,
+                              const ast::ClassDecl *cls,
+                              const ast::InterfaceDecl *iface) {
+            if (!cls || !iface) return false;
+            for (const ast::ClassDecl *walk = cls; walk; walk = get_base_class(c, walk)) {
+                for (auto *iface_ty: walk->interfaces) {
+                    if (iface_ty->kind != ast::TypeKind::Named) continue;
+                    auto *nt = static_cast<const ast::NamedType *>(iface_ty);
+                    auto *sym = resolver::lookup(c->resolver_, nt);
+                    if (!sym || sym->kind != resolver::SymbolKind::Interface) continue;
+                    if (sym->decl.interface_ == iface) return true;
+                }
+            }
+            return false;
+        }
+
+
         bool check_assignable(const Checker *c, const types::Type *expected, const types::Type *actual,
                               const source::Span &span) {
             if (!expected || !actual) return true;
@@ -160,6 +177,29 @@ namespace frappe::checker {
                 if (ab->b == resolver::Builtin::Nil
                     && expected->kind == types::TypeKind::Optional) {
                     return true;
+                }
+            }
+
+            // Derived classes are assignable to their base classes, including
+            // transitive inheritance. Classes share the LLVM `ptr` representation,
+            // and base fields come first in the struct layout, so no codegen changes
+            // are needed. Interface conformance and generic-class variance are not
+            // supported yet and will be handled separately.
+            if (expected->kind == types::TypeKind::Named
+                && actual->kind == types::TypeKind::Named) {
+                auto *exp_n = static_cast<const types::NamedType *>(expected);
+                auto *act_n = static_cast<const types::NamedType *>(actual);
+                if (exp_n->decl.kind == types::NamedDeclKind::Class
+                    && act_n->decl.kind == types::NamedDeclKind::Class) {
+                    if (is_subclass(c, act_n->decl.class_, exp_n->decl.class_)) {
+                        return true;
+                    }
+                }
+                if (exp_n->decl.kind == types::NamedDeclKind::Interface
+                    && act_n->decl.kind == types::NamedDeclKind::Class) {
+                    if (class_implements(c, act_n->decl.class_, exp_n->decl.interface_)) {
+                        return true;
+                    }
                 }
             }
 

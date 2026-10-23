@@ -24,6 +24,9 @@
 #include <frappe/source/span.hpp>
 #include <frappe/syntax/constants.hpp>
 #include <frappe/fatal/fatality.hpp>
+#include <frappe/mir/validate.hpp>
+
+#include "checker/checker_internal.hpp"
 
 
 namespace frappe::mir {
@@ -49,6 +52,19 @@ namespace frappe::mir {
             char *buf = static_cast<char *>(b->mr->allocate(s.size(), alignof(char)));
             std::memcpy(buf, s.data(), s.size());
             return std::string_view{buf, s.size()};
+        }
+
+        // File-local base-class walker to avoid including checker_internal.hpp.
+        // Assumes `extends` accepts only NamedType; update if generic or
+        // qualified base types are introduced.
+        [[nodiscard]] const ast::ClassDecl *
+        mir_base_of(const Checker *c, const ast::ClassDecl *cd) {
+            if (!cd->base) return nullptr;
+            if (cd->base->kind != ast::TypeKind::Named) return nullptr;
+            auto *nt = static_cast<const ast::NamedType *>(cd->base);
+            auto *sym = resolver::lookup(c->resolver_, nt);
+            if (!sym || sym->kind != resolver::SymbolKind::Class) return nullptr;
+            return sym->decl.class_;
         }
 
         [[nodiscard]] const Type *type_of(MirBuilder *b, const void *node) {
@@ -555,6 +571,27 @@ namespace frappe::mir {
                     }
                 }
             }
+            bool is_virtual = false;
+            std::optional<std::uint32_t> vtable_slot;
+            if (callee_name.empty() && call->callee->kind == ast::ExprKind::Member) {
+                auto *me = static_cast<const ast::MemberExpr*> (call->callee);
+                const Type *obj_ty = type_of(b, me->object);
+                if (obj_ty && obj_ty->kind == TypeKind::Named) {
+                    if (auto *nt = static_cast<const types::NamedType*>(obj_ty); nt->decl.kind == types::NamedDeclKind::Interface) {
+                        auto *iface = nt->decl.interface_;
+                        if (auto iface_it = b->interface_slot_map.find(iface); iface_it != b->interface_slot_map.end()) {
+                            auto slot_it = iface_it->second.find(me->name.text);
+                            if (slot_it != iface_it->second.end()) {
+                                is_virtual = true;
+                                vtable_slot = slot_it->second;
+                                callee_name = me->name.text;
+
+                            }
+                        }
+                    }
+
+                }
+            }
 
             if (callee_name.empty()) {
                 FRAPPE_UNREACHABLE(call->span,
@@ -584,12 +621,12 @@ namespace frappe::mir {
             for (auto *arg: call->args) args.push_back(lower_expr(b, arg));
 
             if (is_void) {
-                emit(b, MirCall{std::nullopt, MirDirectCallee{callee_name}, std::move(args)});
+                emit(b, MirCall{std::nullopt, MirDirectCallee{callee_name}, std::move(args), is_virtual, vtable_slot});
                 return nil_value(b);
             }
 
             auto dest = new_temp(b, ty);
-            emit(b, MirCall{dest, MirDirectCallee{callee_name}, std::move(args)});
+            emit(b, MirCall{dest, MirDirectCallee{callee_name}, std::move(args), is_virtual, vtable_slot});
             return MirValue{dest};
         }
 
@@ -781,11 +818,16 @@ namespace frappe::mir {
                 .base_name = std::nullopt,
                 .fields = std::pmr::vector<MirField>{b->mr},
                 .methods = std::pmr::vector<MirMethod>{b->mr},
+
                 .has_init = false,
                 .has_deinit = false,
+                .vtable_slots = std::pmr::vector<std::string_view>{b->mr},
+
                 .has_vtable = false,
                 .is_final = cd->is_final,
                 .is_abstract = cd->is_abstract,
+
+
             };
 
             if (cd->base && cd->base->kind == ast::TypeKind::Named) {
@@ -831,10 +873,37 @@ namespace frappe::mir {
                 full += cd->name.text;
                 full += '.';
                 full += m->name.text;
-                mc.methods.push_back(MirMethod{
+                MirMethod mm{
                     .name = m->name.text,
                     .fn_name = intern_string(b, full),
-                });
+                };
+                // record interface vtable slot if this method
+                // satisfies any interface method the class implements.
+                // Note: same-name methods across multiple interfaces may
+                // occupy several slots — we record the *first* one here
+                // for dump purposes; the full picture lives in
+                // mc.vtable_slots.
+                for (const ast::ClassDecl *walk = cd; walk; walk = mir_base_of(
+                                                                b->checker, walk)) {
+                    bool found = false;
+                    for (auto *iface_ty: walk->interfaces) {
+                        if (iface_ty->kind != ast::TypeKind::Named) continue;
+                        auto *nt = static_cast<const ast::NamedType *>(iface_ty);
+                        auto *sym = resolver::lookup(b->checker->resolver_, nt);
+                        if (!sym || sym->kind != resolver::SymbolKind::Interface) continue;
+                        auto iface_it = b->interface_slot_map.find(sym->decl.interface_);
+                        if (iface_it == b->interface_slot_map.end()) continue;
+                        auto slot_it = iface_it->second.find(m->name.text);
+                        if (slot_it != iface_it->second.end()) {
+                            mm.vtable_slot = slot_it->second;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (found) break;
+                }
+
+                mc.methods.push_back(std::move(mm));
             }
 
             // Inherit base class methods not overridden locally.
@@ -857,6 +926,57 @@ namespace frappe::mir {
                     }
                 }
             }
+            // Walk all interfaces this class (and its ancestors) implement.
+            // For each interface method, find the class method that satisfies
+            // it and record the fn_name at the corresponding global slot.
+            //
+            // Conformance has already been validated by the checker
+            // so every required method exists with the right signature — we
+            // just need to wire the fn_name into the right slot index.
+            if (b->total_interface_slots > 0) {
+                mc.vtable_slots.assign(b->total_interface_slots, std::string_view{});
+
+                for (const ast::ClassDecl *walk = cd; walk; walk = mir_base_of(
+                                                                b->checker, walk)) {
+                    for (auto *iface_ty: walk->interfaces) {
+                        // Resolve interface. Mirrors the checker's helper but
+                        // local to avoid coupling; only accepts flat NamedType
+                        // (AppliedType rejected at 5a).
+                        if (iface_ty->kind != ast::TypeKind::Named) continue;
+                        auto *nt = static_cast<const ast::NamedType *>(iface_ty);
+                        auto *sym = resolver::lookup(b->checker->resolver_, nt);
+                        if (!sym || sym->kind != resolver::SymbolKind::Interface) continue;
+                        auto *iface = sym->decl.interface_;
+
+                        auto iface_it = b->interface_slot_map.find(iface);
+                        if (iface_it == b->interface_slot_map.end()) continue;
+
+                        for (auto *req_m: iface->methods) {
+                            auto slot_it = iface_it->second.find(req_m->name.text);
+                            if (slot_it == iface_it->second.end()) continue;
+                            auto slot = slot_it->second;
+
+                            // Find the class method satisfying this slot.
+                            for (const auto &m: mc.methods) {
+                                if (m.name == req_m->name.text) {
+                                    mc.vtable_slots[slot] = m.fn_name;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                bool any_filled = false;
+                for (const auto &s: mc.vtable_slots) {
+                    if (!s.empty()) {
+                        any_filled = true;
+                        break;
+                    }
+                }
+                mc.has_vtable = any_filled;
+            }
+
 
             b->module_.classes.push_back(std::move(mc));
 
@@ -886,8 +1006,24 @@ namespace frappe::mir {
             },
             .scope = std::pmr::unordered_map<const resolver::Symbol *, MirLocalId>{mr},
             .defer_stack = std::pmr::vector<std::pmr::vector<Defer_Block> >{mr},
+            .interface_slot_map = std::pmr::unordered_map<
+                const ast::InterfaceDecl *,
+                std::pmr::unordered_map<std::string_view, std::uint32_t> >{mr},
 
         };
+        // Pass 0: Assign globally unique vtable slots to interface methods.
+        // Methods with the same name in different interfaces get distinct slots.
+        // This enables uniform dispatch without per-interface offset calculations.
+        for (auto *d: program.decls) {
+            if (d->kind != ast::DeclKind::Interface) continue;
+            auto *iface = static_cast<const ast::InterfaceDecl *>(d);
+            std::pmr::unordered_map<std::string_view, std::uint32_t> inner{b.mr};
+            for (auto *m: iface->methods) {
+                inner[m->name.text] = b.next_interface_slot++;
+            }
+            b.interface_slot_map.emplace(iface, std::move(inner));
+        }
+        b.total_interface_slots = b.next_interface_slot;
 
         // -----------------------------------------------------------------
         // Pass 1: classes — tri-color DFS to order base-before-derived
@@ -960,6 +1096,20 @@ namespace frappe::mir {
         for (const auto &[name, inst]: checker->instances) {
             (void) name;
             lower_checked_fn(&b, inst);
+        }
+
+        // -----------------------------------------------------------------
+        // Pass 4: validate
+        // -----------------------------------------------------------------
+        // Every MirModule that leaves build_module has been structurally
+        // checked: no out-of-range IDs, no dangling labels, terminator
+        // placement correct. Callers can trust that invariant and index
+        // MIR vectors without bounds checks.
+        {
+            auto v_errors = validate_module(b.module_, mr);
+            if (!v_errors.empty()) {
+                report_validation_errors(diag, v_errors);
+            }
         }
 
         return std::move(b.module_);

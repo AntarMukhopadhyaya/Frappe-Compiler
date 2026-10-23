@@ -36,8 +36,17 @@ namespace frappe::mir {
         // LIFO stack of scopes. Each scope holds a LIFO stack of defer blocks.
         // Emitted at scope exit: reverse blocks, forward instructions per block.
         std::pmr::vector<std::pmr::vector<Defer_Block> > defer_stack;
+        // Pass 0 of build_module
+        // walks all interface declarations in source order, assigning each
+        // method a unique slot. Subsequent passes consult this map when
+        // building class vtables.
+        std::pmr::unordered_map<
+            const ast::InterfaceDecl*,
+        std::pmr::unordered_map<std::string_view, std::uint32_t>> interface_slot_map;
         std::uint32_t next_temp = 0;
         std::uint32_t next_label = 0;
+        std::uint32_t next_interface_slot = 0;
+        std::uint32_t total_interface_slots = 0;
     };
 
     [[nodiscard]] MirModule build_module(

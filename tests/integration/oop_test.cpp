@@ -100,24 +100,25 @@ class Bad {
     CHECK_ERROR_LINE(r.get(), 0, 3, "'init' cannot be static");
 }
 
-TEST_CASE("deinit must take exactly one parameter", "[oop]") {
+TEST_CASE("deinit must take no parameters", "[oop][deinit]") {
     auto r = frappe_test::compile(R"(
-class Bad {
-    fn deinit() {}
+class R {
+    fn deinit(x: Int) { }
 }
+fn main() { }
 )");
     REQUIRE(r->error_count() == 1);
-    CHECK_ERROR_LINE(r.get(), 0, 3, "'deinit' must take exactly one parameter");
+    CHECK_ERROR_LINE(r.get(), 0, 3, "must take no parameters");
 }
-
-TEST_CASE("deinit cannot have a return type", "[oop]") {
+TEST_CASE("deinit cannot have a return type", "[oop][deinit]") {
     auto r = frappe_test::compile(R"(
-class Bad {
-    fn deinit(alloc: Int) -> Int { return 0; }
+class R {
+    fn deinit() -> Int { return 0; }
 }
+fn main() { }
 )");
     REQUIRE(r->error_count() == 1);
-    CHECK_ERROR_LINE(r.get(), 0, 3, "'deinit' cannot declare a return type");
+    CHECK_ERROR_LINE(r.get(), 0, 3, "cannot declare a return type");
 }
 
 TEST_CASE(".init() call is rejected", "[oop]") {
