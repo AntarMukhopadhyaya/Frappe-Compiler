@@ -14,8 +14,10 @@
 #include <frappe/ast/expr.hpp>
 #include <frappe/ast/stmt.hpp>
 #include <frappe/ast/type.hpp>
+#include <frappe/resolver/intrinsics.hpp>
 
-#include "frappe/fatal/fatality.hpp"
+
+#include <frappe/fatal/fatality.hpp>
 
 
 namespace frappe::resolver {
@@ -396,10 +398,13 @@ namespace frappe::resolver {
                     Symbol *sym = resolve(r, ie->name.text);
                     if (sym) {
                         bind(r, ie, sym);
-                    } else {
+                    } else if (!resolver::find_intrinsic(ie->name.text)) {
+                        // Not a symbol and not an intrinsic — genuinely unknown.
                         diagnostics::report_error(r->diag, ie->name.span,
                                                   "unknown identifier '{}'", ie->name.text);
                     }
+                    // If it's an intrinsic: no symbol to bind, no error to report. The
+                    // checker dispatches on the name via its own find_intrinsic call.
                     break;
                 }
                 case ExprKind::This: {

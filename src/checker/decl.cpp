@@ -264,12 +264,28 @@ namespace frappe::checker::detail {
                     check_assignable(c, declared, it, vd->init->span);
                 }
                 if (auto *sym = resolver::lookup(c->resolver_, vd); sym) {
-                    c->symbol_types[sym] = declared;
+                    set_symbol_type(c, sym, declared);
                 }
             } else if (vd->init) {
                 auto *it = check_expr(c, vd->init);
                 if (auto *sym = resolver::lookup(c->resolver_, vd); sym) {
-                    c->symbol_types[sym] = it;
+                    set_symbol_type(c, sym, it);
+                }
+            }
+        }
+
+        void check_enum_decl(Checker *c, const ast::EnumDecl *ed) {
+            // Note: duplicate variant detection lives in the parser (parse_enum_decl).
+            // It must be there — the resolver also errors on redeclaration and bails
+            // the pipeline before the checker runs. If duplicates were only checked
+            // here, this code would be unreachable.
+            //
+            // What IS checked here: value type. The parser doesn't know about types,
+            // so "enum Bad { A = \"red\" }" reaches the checker with a non-Int value.
+            for (auto *v: ed->variants) {
+                if (v->value && v->value->kind != ast::ExprKind::Int) {
+                    diagnostics::report_error(c->diag, v->value->span,
+                                              "enum variant value must be an integer literal");
                 }
             }
         }
@@ -283,12 +299,12 @@ namespace frappe::checker::detail {
                         check_assignable(c, ft, it, field->init->span);
                     }
                     if (auto *sym = resolver::lookup(c->resolver_, field); sym) {
-                        c->symbol_types[sym] = ft;
+                        set_symbol_type(c, sym, ft);
                     }
                 } else if (field->init) {
                     auto *it = check_expr(c, field->init);
                     if (auto *sym = resolver::lookup(c->resolver_, field); sym) {
-                        c->symbol_types[sym] = it;
+                        set_symbol_type(c, sym, it);
                     }
                 }
             }
@@ -426,7 +442,7 @@ namespace frappe::checker::detail {
                                               "'deinit' cannot be abstract");
                 }
             }
-            check_implements(c,cd);
+            check_implements(c, cd);
             if (!cd->is_abstract && cd->base) {
                 // Build the inheritance chain root-first: [root, ..., cd].
                 std::pmr::vector<const ast::ClassDecl *> chain{c->mr};
@@ -499,7 +515,7 @@ namespace frappe::checker::detail {
         for (auto *param: fn->params) {
             if (param->type_) {
                 if (auto *sym = resolver::lookup(c->resolver_, param); sym) {
-                    c->symbol_types[sym] = resolve_ast_type(c, param->type_);
+                    set_symbol_type(c, sym, resolve_ast_type(c, param->type_));
                 }
             }
         }
@@ -507,8 +523,11 @@ namespace frappe::checker::detail {
         if (!fn->body) return;
 
         auto *old = c->current_fn;
+        auto saved_loop_depth = c->loop_depth;
         c->current_fn = fn;
+        c->loop_depth = 0;
         for (auto *stmt: fn->body->stmts) check_stmt(c, stmt);
+        c->loop_depth = saved_loop_depth;
         c->current_fn = old;
     }
 
@@ -528,9 +547,11 @@ namespace frappe::checker::detail {
             case ast::DeclKind::Class: check_class_decl(c, static_cast<const ast::ClassDecl *>(d));
                 break;
             case ast::DeclKind::Interface:
-                check_interface_decl(c, static_cast<const  ast::InterfaceDecl *>(d));
+                check_interface_decl(c, static_cast<const ast::InterfaceDecl *>(d));
                 break;
             case ast::DeclKind::Enum:
+                check_enum_decl(c, static_cast<const ast::EnumDecl *>(d));
+                break;
             case ast::DeclKind::Import:
                 break;
         }

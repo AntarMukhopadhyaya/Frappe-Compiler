@@ -8,6 +8,7 @@
 #include <iterator>
 #include <frappe/checker/checker.hpp>
 #include <frappe/source/span.hpp>
+#include <ranges>
 
 namespace frappe::checker::detail {
     [[nodiscard]] types::Type *resolve_ast_type(Checker *c, const ast::Type *t);
@@ -52,13 +53,8 @@ namespace frappe::checker::detail {
 
     void drain_worklist(Checker *c);
 
-    inline void record_call_name(Checker *c, const void *node, std::pmr::string name) {
-        if (c->call_names_out) {
-            c->call_names_out->insert_or_assign(node, std::move(name));
-        } else {
-            c->call_names.insert_or_assign(node, std::move(name));
-        }
-    }
+
+
 
 
     [[nodiscard]] const ast::ClassDecl *get_base_class(const Checker *c, const ast::ClassDecl *cd);
@@ -79,9 +75,17 @@ namespace frappe::checker::detail {
                                    const ast::ClassDecl *derived,
                                    const ast::ClassDecl *base);
 
-    struct Field_Hit  { const ast::ClassDecl* declaring; const ast::FieldDecl* field; };
-    struct Method_Hit { const ast::ClassDecl* declaring; const ast::FnDecl*    method; };
+    struct Field_Hit {
+        const ast::ClassDecl *declaring;
+        const ast::FieldDecl *field;
+    };
 
-    [[nodiscard]] Field_Hit  find_field_with_declaring (Checker* c, const ast::ClassDecl* start, std::string_view name);
-    [[nodiscard]] Method_Hit find_method_with_declaring(Checker* c, const ast::ClassDecl* start, std::string_view name);
+    struct Method_Hit {
+        const ast::ClassDecl *declaring;
+        const ast::FnDecl *method;
+    };
+
+    [[nodiscard]] Field_Hit find_field_with_declaring(Checker *c, const ast::ClassDecl *start, std::string_view name);
+
+    [[nodiscard]] Method_Hit find_method_with_declaring(Checker *c, const ast::ClassDecl *start, std::string_view name);
 }

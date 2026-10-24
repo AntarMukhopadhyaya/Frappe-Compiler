@@ -1,0 +1,5 @@
+fn main() {
+    println("hello, frappe");
+    println(42);
+    println(3.14);
+}

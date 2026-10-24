@@ -16,6 +16,8 @@
 
 #include <cstring>
 #include <type_traits>
+#include <cstdlib>
+#include <fstream>
 
 #include <frappe/diagnostics/engine.hpp>
 #include <frappe/fatal/fatality.hpp>
@@ -165,7 +167,17 @@ namespace frappe::codegen::detail {
                 }
                 break;
             }
-            case TypeKind::Named:
+            case TypeKind::Named: {
+                auto *nt = static_cast<const types::NamedType *>(t);
+                if (nt->decl.kind == types::NamedDeclKind::Enum) {
+                    // Enums are i64 constants at the machine level.
+                    result = ctx.builder.getInt64Ty();
+                } else {
+                    // Classes and interfaces are opaque pointers.
+                    result = ctx.builder.getPtrTy();
+                }
+                break;
+            }
             case TypeKind::Array:
             case TypeKind::Optional:
             case TypeKind::Func:
@@ -266,12 +278,24 @@ namespace frappe::codegen::detail {
 
     void emit_runtime_decls(CodegenContext &ctx) {
         auto *i64 = ctx.builder.getInt64Ty();
+        auto *dbl = ctx.builder.getDoubleTy();
         auto *ptr = ctx.builder.getPtrTy();
         auto *void_ty = ctx.builder.getVoidTy();
         auto *str_ty = string_struct_type(ctx.llvm);
 
         auto make_fn = [&](llvm::StringRef name, llvm::FunctionType *ft) {
             return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &ctx.mod);
+        };
+        // Register every external function in ctx.functions so handle_call
+        // can find them by name. Non-handler paths (handle_new_object,
+        // handle_panic, handle_binary) use the ctx.rt_* pointers directly;
+        // registration here is what lets MirCall{_, MirDirectCallee{name}, _}
+        // resolve through the generic call path — which is how println flows.
+        auto decl = [&](llvm::StringRef name, llvm::FunctionType *ft) {
+            auto *fn = make_fn(name, ft);
+            ctx.functions.emplace(
+                std::string_view(fn->getName().data(), fn->getName().size()), fn);
+            return fn;
         };
 
         ctx.rt_alloc = make_fn("__frappe_alloc", llvm::FunctionType::get(ptr, {i64}, false));
@@ -280,6 +304,15 @@ namespace frappe::codegen::detail {
         ctx.rt_panic->addFnAttr(llvm::Attribute::NoReturn);
         ctx.rt_str_concat = make_fn("__frappe_str_concat", llvm::FunctionType::get(str_ty, {str_ty, str_ty}, false));
         ctx.rt_str_eq = make_fn("__frappe_str_eq", llvm::FunctionType::get(i64, {str_ty, str_ty}, false));
+        ctx.rt_println_int = decl("__frappe_println_int",
+                                  llvm::FunctionType::get(void_ty, {i64}, false));
+        ctx.rt_println_float = decl("__frappe_println_float",
+                                    llvm::FunctionType::get(void_ty, {dbl}, false));
+        ctx.rt_println_str = decl("__frappe_println_str",
+                                  llvm::FunctionType::get(void_ty, {str_ty}, false));
+        ctx.rt_bounds_error = decl("__frappe_bounds_error",
+                                   llvm::FunctionType::get(void_ty, {i64, i64}, false));
+        ctx.rt_bounds_error->addFnAttr(llvm::Attribute::NoReturn);
     }
 
     void emit_classes(CodegenContext &ctx) {
@@ -470,5 +503,57 @@ namespace frappe::codegen {
                                   "codegen requires building with -DFRAPPE_LLVM=ON");
         return {};
 #endif
+    }
+
+    std::string_view runtime_lib_path() {
+#ifdef FRAPPE_RUNTIME_LIB
+        return FRAPPE_RUNTIME_LIB;
+#else
+        return {};
+#endif
+    }
+
+    bool compile_to_executable(std::string_view llvm_ir,
+                               std::string_view exe_path,
+                               std::string *error_out) {
+        // 1. Build the .ll path by appending the suffix. Do this BEFORE writing
+        //    so the file and the command both refer to the same name.
+        std::string ll_path{exe_path};
+        ll_path += ".ll";
+
+        // 2. Write the IR to <exe_path>.ll.
+        {
+            std::ofstream out(ll_path, std::ios::binary);
+            if (!out) {
+                *error_out = "failed to open " + ll_path;
+                return false;
+            }
+            out.write(llvm_ir.data(), static_cast<std::streamsize>(llvm_ir.size()));
+            if (!out) {
+                *error_out = "failed to write " + ll_path;
+                return false;
+            }
+        }
+
+        std::string_view rt = runtime_lib_path();
+        if (rt.empty()) {
+            *error_out = "FRAPPE_RUNTIME_LIB not configured at build time";
+            return false;
+        }
+
+        // 3. clang reads ll_path, writes exe_path. Different files.
+        std::string cmd = "clang ";
+        cmd += ll_path;
+        cmd += ' ';
+        cmd += rt;
+        cmd += " -o ";
+        cmd += exe_path;
+
+        int rc = std::system(cmd.c_str());
+        if (rc != 0) {
+            *error_out = "clang failed (exit " + std::to_string(rc) + "): " + cmd;
+            return false;
+        }
+        return true;
     }
 }

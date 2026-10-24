@@ -5,6 +5,7 @@
 #include <frappe/checker/checker.hpp>
 
 #include <cassert>
+#include <ranges>
 
 #include "checker_internal.hpp"
 
@@ -28,14 +29,14 @@ namespace frappe::checker {
             .store = types::make_store(mr),
             .node_types = std::pmr::unordered_map<const void *, types::Type *>{mr},
             .symbol_types = std::pmr::unordered_map<const resolver::Symbol *, types::Type *>{mr},
+            .call_names = std::pmr::unordered_map<const void *, std::pmr::string>{mr},
             .visiting = std::pmr::unordered_set<const resolver::Symbol *>{mr},
             .current_fn = nullptr,
             .current_class = nullptr,
             .subst = nullptr,
             .instances = std::pmr::unordered_map<std::pmr::string, Checked_Fn *>{mr},
             .worklist = std::pmr::vector<Pending_Instance>{mr},
-            .call_names = std::pmr::unordered_map<const void *, std::pmr::string>{mr},
-            .call_names_out = nullptr,
+            .scope_stack = std::pmr::vector<Scope *>{mr}
         };
     }
 
@@ -50,15 +51,7 @@ namespace frappe::checker {
         types::Type *resolve_ast_type(Checker *c, const ast::Type *t) {
             if (!t) return c->store.void_type;
             // Cache pert instance context wins else global
-            if (c->node_types_out) {
-                if (auto it = c->node_types_out->find(t); it != c->node_types_out->end()) {
-                    return it->second;
-                }
-            } else {
-                if (auto it = c->node_types.find(t); it != c->node_types.end()) {
-                    return it->second;
-                }
-            }
+            if (auto* cached = get_type(c,t); cached) return cached;
             types::Type *result = c->store.error_type;
 
             switch (t->kind) {
@@ -223,6 +216,13 @@ namespace frappe::checker {
 
         types::Type *type_of_symbol(Checker *c, const resolver::Symbol *sym) {
             if (!sym) return c->store.error_type;
+            // Lookup walks scope innermost-first falls through to global
+            for (auto & it : std::views::reverse(c->scope_stack)) {
+                if (auto found = it->symbol_types.find(sym);
+                    found != it->symbol_types.end()) {
+                    return found->second;
+                }
+            }
             if (auto it = c->symbol_types.find(sym); it != c->symbol_types.end()) {
                 return it->second;
             }
@@ -237,7 +237,7 @@ namespace frappe::checker {
             types::Type *result = c->store.error_type;
 
             if (!is_value_kind(sym->kind)) {
-                c->symbol_types[sym] = result;
+                set_symbol_type(c, sym, result);
                 return result;
             }
 
@@ -277,7 +277,7 @@ namespace frappe::checker {
                 }
             }
 
-            c->symbol_types[sym] = result;
+            set_symbol_type(c, sym, result);
             return result;
         }
     }

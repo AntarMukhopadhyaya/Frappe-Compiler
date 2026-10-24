@@ -20,6 +20,10 @@ namespace frappe::mir {
     struct Defer_Block {
         std::pmr::vector<MirInstruction> instructions;
     };
+    struct LoopContext {
+        MirLabel continue_label;
+        MirLabel break_label;
+    };
 
     struct MirBuilder {
         std::pmr::memory_resource *mr;
@@ -36,6 +40,7 @@ namespace frappe::mir {
         // LIFO stack of scopes. Each scope holds a LIFO stack of defer blocks.
         // Emitted at scope exit: reverse blocks, forward instructions per block.
         std::pmr::vector<std::pmr::vector<Defer_Block> > defer_stack;
+        std::pmr::vector<LoopContext> loop_stack;
         // Pass 0 of build_module
         // walks all interface declarations in source order, assigning each
         // method a unique slot. Subsequent passes consult this map when

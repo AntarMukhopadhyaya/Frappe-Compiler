@@ -50,6 +50,10 @@ namespace frappe::codegen::detail {
         llvm::Function *rt_panic = nullptr;
         llvm::Function *rt_str_concat = nullptr;
         llvm::Function *rt_str_eq = nullptr;
+        llvm::Function *rt_println_int = nullptr;
+        llvm::Function *rt_println_float = nullptr;
+        llvm::Function *rt_println_str = nullptr;
+        llvm::Function *rt_bounds_error = nullptr;
 
         struct FnState {
             const mir::MirFunction *mir_fn = nullptr;

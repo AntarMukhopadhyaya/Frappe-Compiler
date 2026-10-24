@@ -239,7 +239,7 @@ TEST_CASE("defer inside for loop fires on each iteration", "[mir][defer][edge]")
 class R { fn close() { } }
 fn work() {
     let r = new R();
-    for (let i: Int = 0; i < 3; i += 1) {
+    for (var i: Int = 0; i < 3; i += 1) {
         defer r.close();
     }
 }
@@ -576,7 +576,7 @@ TEST_CASE("for loop emits init, cond, body, update, back-edge",
     auto r = frappe_test::compile(R"(
 fn work(n: Int) -> Int {
     var sum: Int = 0;
-    for (let i: Int = 0; i < n; i += 1) {
+    for (var i: Int = 0; i < n; i += 1) {
         sum += i;
     }
     return sum;
@@ -717,7 +717,7 @@ TEST_CASE("mixed control flow is well-formed", "[mir][control]") {
 fn branchy(c: Bool, n: Int) -> Int {
     var sum: Int = 0;
     if (c) {
-        for (let i: Int = 0; i < n; i += 1) {
+        for (var i: Int = 0; i < n; i += 1) {
             sum += i;
         }
     } else {
@@ -803,7 +803,7 @@ TEST_CASE("for body with return — no fall-through return emitted",
           "[mir][control]") {
     auto r = frappe_test::compile(R"(
 fn work(n: Int) -> Int {
-    for (let i: Int = 0; i < n; i += 1) {
+    for (var i: Int = 0; i < n; i += 1) {
         return 1;
     }
     return 0;

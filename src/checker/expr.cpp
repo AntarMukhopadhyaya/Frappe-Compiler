@@ -2,7 +2,7 @@
 // Created by antar on 19/10/26.
 //
 #include <frappe/checker/checker.hpp>
-
+#include <frappe/resolver/intrinsics.hpp>
 #include <span>
 #include <string_view>
 
@@ -216,6 +216,48 @@ namespace frappe::checker::detail {
                                           "left side of assignment is not assignable");
                 return bind_expr(c, ae, c->store.error_type);
             }
+            // Check simple identifier mutability before compound assignment.
+            // Field assignments use check_field_assign; array elements are mutable.
+            // Ensures `let` rejects both `x = 1` and `x += 1`.
+            if (ae->left->kind == ast::ExprKind::Ident) {
+                auto *ie = static_cast<const ast::IdentExpr *>(ae->left);
+                if (auto *sym = resolver::lookup(c->resolver_, ie); sym) {
+                    if (sym->kind == resolver::SymbolKind::LocalVar &&
+                        !sym->decl.var_stmt->is_mutable) {
+                        diagnostics::report_error(
+                            c->diag, ae->left->span,
+                            "cannot assign to immutable binding '{}' "
+                            "(declared with 'let'; use 'var' to make it mutable)",
+                            ie->name.text);
+                        return bind_expr(c, ae, c->store.error_type);
+                    }
+
+                    if (sym->kind == resolver::SymbolKind::Var &&
+                        sym->decl.var_decl->is_mutable) {
+                        diagnostics::report_error(
+                            c->diag, ae->left->span,
+                            "cannot assign to immutable module variable '{}'",
+                            ie->name.text);
+                        return bind_expr(c, ae, c->store.error_type);
+                    }
+
+                    if (sym->kind == resolver::SymbolKind::Param) {
+                        diagnostics::report_error(
+                            c->diag, ae->left->span,
+                            "cannot assign to parameter '{}'",
+                            ie->name.text);
+                        return bind_expr(c, ae, c->store.error_type);
+                    }
+
+                    if (sym->kind == resolver::SymbolKind::ForInVar) {
+                        diagnostics::report_error(
+                            c->diag, ae->left->span,
+                            "cannot assign to for-in variable '{}'",
+                            ie->name.text);
+                        return bind_expr(c, ae, c->store.error_type);
+                    }
+                }
+            }
             // final field check fires for both x = y and x += y
             if (ae->left->kind == ast::ExprKind::Member) {
                 auto *me = static_cast<const ast::MemberExpr *>(ae->left);
@@ -272,11 +314,63 @@ namespace frappe::checker::detail {
             }
         }
 
+        Type *check_intrinsic_call(Checker *c, const ast::CallExpr *call,
+                                   const resolver::Intrinsic &intr) {
+            if (call->args.size() != intr.arg_count) {
+                diagnostics::report_error(c->diag, call->span,
+                                          "'{}' expects {} argument{}, got {}",
+                                          intr.name, intr.arg_count,
+                                          intr.arg_count == 1 ? "" : "s",
+                                          call->args.size());
+                for (auto *arg: call->args) static_cast<void>(check_expr(c, arg));
+                return bind_expr(c, call, c->store.error_type);
+            }
+            // v1: all intrinsics are 1-arg. When a 0-arg or 2-arg intrinsic
+            // lands, the arg-matching logic below grows a switch on arg_count.
+            auto *at = check_expr(c, call->args[0]);
+            if (types::is_error(at)) {
+                return bind_expr(c, call, c->store.error_type);
+            }
+
+            if (at->kind != TypeKind::Builtin) {
+                diagnostics::report_error(c->diag, call->args[0]->span,
+                                          "'{}' has no overload for {}",
+                                          intr.name,
+                                          types::type_name(c->store.mr, at));
+                return bind_expr(c, call, c->store.error_type);
+            }
+            auto *bt = static_cast<const types::BuiltinType *>(at);
+
+            for (std::size_t i = 0; i < intr.overload_count; ++i) {
+                const auto &ov = intr.overloads[i];
+                if (ov.arg_type == bt->b) {
+                    record_call_name(c, call, std::pmr::string{ov.runtime_name, c->mr});
+                    return bind_expr(c, call, c->store.void_type);
+                }
+            }
+
+            // No overload matched — report the available type names so the
+            // error message is actionable.
+            std::pmr::string available{c->mr};
+            for (std::size_t i = 0; i < intr.overload_count; ++i) {
+                if (i > 0) available += ", ";
+                available += resolver::BUILTIN_NAMES[
+                    static_cast<std::size_t>(intr.overloads[i].arg_type)];
+            }
+            diagnostics::report_error(c->diag, call->args[0]->span,
+                                      "'{}' has no overload for {}; available: {}",
+                                      intr.name,
+                                      types::type_name(c->store.mr, at),
+                                      available);
+            return bind_expr(c, call, c->store.error_type);
+        }
+
         Type *check_call(Checker *c, const ast::CallExpr *call) {
             if (call->callee->kind == ExprKind::Member) {
                 return check_method_call(c, call,
                                          static_cast<const ast::MemberExpr *>(call->callee));
             }
+
             if (call->callee->kind == ExprKind::Ident) {
                 auto *ident = static_cast<const ast::IdentExpr *>(call->callee);
                 if (auto *sym = resolver::lookup(c->resolver_, ident); sym) {
@@ -287,6 +381,10 @@ namespace frappe::checker::detail {
                             return check_generic_call(c, call, fn);
                         }
                         return check_call_to_fn(c, call, fn);
+                    }
+                } else {
+                    if (auto *intr = resolver::find_intrinsic(ident->name.text)) {
+                        return check_intrinsic_call(c, call, *intr);
                     }
                 }
             }
@@ -386,10 +484,43 @@ namespace frappe::checker::detail {
             && e->kind == ExprKind::Array
             && expected->kind == TypeKind::Array) {
             auto *arr = static_cast<const ast::ArrayExpr *>(e);
+            auto *exp_arr = static_cast<const types::ArrayType *>(expected);
+            if (exp_arr->size >= 0
+                && static_cast<std::int64_t>(arr->elements.size()) != exp_arr->size) {
+                diagnostics::report_error(c->diag, arr->span,
+                                          "array literal has {} element{}, expected {}",
+                                          arr->elements.size(),
+                                          arr->elements.size() == 1 ? "" : "s",
+                                          exp_arr->size);
+                // Still check each element so downstream type errors aren't
+                // silently swallowed by the size diagnostic.
+                for (auto *elem: arr->elements) {
+                    static_cast<void>(check_expr(c, elem));
+                }
+                set_type(c, arr, expected);
+                return expected;
+            }
+
+
+            // Empty array literal: use expected directly.
+
             if (arr->elements.empty()) {
                 set_type(c, arr, expected);
                 return expected;
             }
+            // Non-empty: check each element against the expected element type.
+            // This handles `let animals: [Animal] = [new Dog(), new Cat()]` —
+            // each element is checked against Animal, not against the first
+            // element's inferred type.
+            for (auto *elem: arr->elements) {
+                auto *et = check_expr(c, elem);
+                check_assignable(c, exp_arr->element, et, elem->span);
+            }
+            // The array's own type is the expected type, not `[inferred_from_first]`.
+            // This is what allows heterogeneous element types (Dog, Cat, Cow) under
+            // an interface element type (Animal) — the array is [Animal], not [Dog].
+            set_type(c, arr, expected);
+            return expected;
         }
         return check_expr(c, e);
     }

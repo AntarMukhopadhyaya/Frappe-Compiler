@@ -103,7 +103,7 @@ TEST_CASE("return inside for inside defer errors", "[defer][checker]") {
     auto r = frappe_test::compile(R"(
 fn work() {
     defer {
-        for (let i: Int = 0; i < 10; i += 1) {
+        for (var i: Int = 0; i < 10; i += 1) {
             return;
         }
     }

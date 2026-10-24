@@ -166,7 +166,9 @@ namespace frappe::checker::detail {
                 auto *ws = static_cast<const ast::WhileStmt *>(s);
                 auto *cond = check_expr(c, ws->condition);
                 require_bool(c, cond, ws->condition->span, "while condition");
+                c->loop_depth++;
                 check_stmt(c, ws->body);
+                c->loop_depth--;
                 break;
             }
             case StmtKind::For: {
@@ -177,7 +179,9 @@ namespace frappe::checker::detail {
                     require_bool(c, cond, fs->condition->span, "for condition");
                 }
                 if (fs->update) static_cast<void>(check_expr(c, fs->update));
+                c->loop_depth++;
                 check_stmt(c, fs->body);
+                c->loop_depth--;
                 break;
             }
             case StmtKind::ForIn: {
@@ -193,7 +197,9 @@ namespace frappe::checker::detail {
                 if (auto *sym = resolver::lookup(c->resolver_, fi); sym) {
                     c->symbol_types[sym] = elem_type;
                 }
+                c->loop_depth++;
                 check_stmt(c, fi->body);
+                c->loop_depth--;
                 break;
             }
             case StmtKind::Switch: {
@@ -234,7 +240,16 @@ namespace frappe::checker::detail {
                 break;
             }
             case StmtKind::Break:
+                if (c->loop_depth == 0) {
+                    diagnostics::report_error(c->diag, s->span,
+                                              "'break' outside of a loop");
+                }
+                break;
             case StmtKind::Continue:
+                if (c->loop_depth == 0) {
+                    diagnostics::report_error(c->diag, s->span,
+                                              "'continue' outside of a loop");
+                }
                 break;
         }
     }

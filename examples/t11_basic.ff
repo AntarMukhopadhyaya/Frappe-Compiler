@@ -27,7 +27,7 @@ fn main() {
         let step: Int = 1;
     }
 
-    for (let i: Int = 0; i < 10; i += 1) {
+    for (var i: Int = 0; i < 10; i += 1) {
         let item: Int = i;
     }
 

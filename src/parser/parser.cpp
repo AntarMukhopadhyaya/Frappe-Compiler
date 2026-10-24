@@ -10,6 +10,7 @@
 #include <format>
 #include <initializer_list>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 
 #include <frappe/ast/decl.hpp>
@@ -575,10 +576,24 @@ namespace frappe::parser {
             if (lbrace.kind != TK::LBrace) return nullptr;
 
             std::pmr::vector<ast::EnumVariant *> variants{p->mr};
+            std::pmr::unordered_set<std::string_view> seen{p->mr};   // ← new
+
+
             while (!check(p, TK::RBrace) && !is_at_end(p)) {
                 auto before = p->current;
                 auto vt = consume(p, TK::Ident, "expected enum variant name");
                 if (vt.kind != TK::Ident) return nullptr;
+                // Duplicate detection: the parser sees the whole variant list at
+                // once, so it can report the specific message here. If we defer to
+                // the checker, the resolver's generic "redeclaration" error bails
+                // the pipeline first and the checker never runs.
+                if (seen.contains(vt.lexeme)) {
+                    diagnostics::report_error(p->diag, vt.span,
+                                       "duplicate enum variant '{}'",
+                                       vt.lexeme);
+                    return nullptr;
+                }
+                seen.insert(vt.lexeme);
 
                 ast::Expr *value = nullptr;
                 if (match(p, TK::Eq)) {

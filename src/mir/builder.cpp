@@ -70,9 +70,9 @@ namespace frappe::mir {
         [[nodiscard]] const Type *type_of(MirBuilder *b, const void *node) {
             if (!node) return nullptr;
             if (b->current_inst) {
-                if (auto it = b->current_inst->node_types.find(node); it != b->current_inst->node_types.end())
-                    return it
-                            ->second;
+                if (auto it = b->current_inst->scope.node_types.find(node);
+                    it != b->current_inst->scope.node_types.end())
+                    return it->second;
             }
             auto it = b->checker->node_types.find(node);
             return it != b->checker->node_types.end() ? it->second : nullptr;
@@ -86,8 +86,8 @@ namespace frappe::mir {
 
         [[nodiscard]] std::string_view call_name_for(MirBuilder *b, const void *node) {
             if (b->current_inst) {
-                if (auto it = b->current_inst->call_names.find(node);
-                    it != b->current_inst->call_names.end()) {
+                if (auto it = b->current_inst->scope.call_names.find(node);
+                    it != b->current_inst->scope.call_names.end()) {
                     return it->second;
                 }
             }
@@ -251,7 +251,9 @@ namespace frappe::mir {
                     MirValue cond = lower_expr(b, ws->condition);
                     emit(b, MirBranch{cond, body, end});
                     emit(b, MirLabelInstruction{body});
+                    b->loop_stack.push_back(LoopContext{top, end});
                     auto result = lower_block(b, ws->body);
+                    b->loop_stack.pop_back();
                     if (result == LowerResult::FallsThrough) {
                         emit(b, MirJump{top});
                     }
@@ -274,13 +276,27 @@ namespace frappe::mir {
                     } else {
                         emit(b, MirJump{body});
                     }
+
                     emit(b, MirLabelInstruction{body});
-                    auto result = lower_block(b, fs->body);
-                    if (result == LowerResult::FallsThrough) {
-                        emit(b, MirLabelInstruction{upd});
-                        if (fs->update) static_cast<void>(lower_expr(b, fs->update));
-                        emit(b, MirJump{top});
-                    }
+                    b->loop_stack.push_back(LoopContext{upd, end});
+                    static_cast<void>(lower_block(b, fs->body));
+                    b->loop_stack.pop_back();
+
+                    // `upd` label, update expression, and back-jump to `top`
+                    // are ALL emitted unconditionally. Three reasons:
+                    //
+                    //   1. `continue` in the body targets `upd` — if `upd`
+                    //      didn't exist, continue would jump to a nonexistent
+                    //      label and the MIR validator would reject.
+                    //   2. Even if the body terminates (return/break) and no
+                    //      continue was emitted, the block after the body may
+                    //      still need to exist as a target for break's
+                    //      `end` label to not be adjacent to `upd`.
+                    //   3. LLVM DCE removes unreachable upd blocks — no cost.
+                    emit(b, MirLabelInstruction{upd});
+                    if (fs->update) static_cast<void>(lower_expr(b, fs->update));
+                    emit(b, MirJump{top});
+
                     emit(b, MirLabelInstruction{end});
                     return LowerResult::FallsThrough;
                 }
@@ -393,9 +409,18 @@ namespace frappe::mir {
                     return LowerResult::Terminated;
                 }
                 case StmtKind::Break:
+                    if (b->loop_stack.empty()) {
+                        // Checker already diagnosed emit nothing and terminate to avoid
+                        // downstream codegen issues
+                        return LowerResult::Terminated;
+                    }
+                    emit(b, MirJump{b->loop_stack.back().break_label});
+                    return LowerResult::Terminated;
                 case StmtKind::Continue:
-                    frappe::diagnostics::report_error(b->diag, s->span,
-                                                      "break/continue not supported in MIR v1");
+                    if (b->loop_stack.empty()) {
+                        return LowerResult::Terminated;
+                    }
+                    emit(b, MirJump{b->loop_stack.back().continue_label});
                     return LowerResult::Terminated;
             }
             return LowerResult::FallsThrough;
@@ -448,8 +473,6 @@ namespace frappe::mir {
         }
 
         [[nodiscard]] MirValue lower_binary(MirBuilder *b, const ast::BinaryExpr *be) {
-            MirValue lhs = lower_expr(b, be->left);
-            MirValue rhs = lower_expr(b, be->right);
             const Type *ty = type_of(b, be);
             if (!ty) ty = b->checker->store.error_type;
 
@@ -457,6 +480,7 @@ namespace frappe::mir {
                 auto dest = new_temp(b, ty);
                 auto check_rhs = new_label(b);
                 auto end = new_label(b);
+                MirValue lhs = lower_expr(b, be->left);
                 emit(b, MirMove{dest, lhs});
                 if (be->op == ast::BinaryOp::And) {
                     emit(b, MirBranch{lhs, check_rhs, end});
@@ -464,11 +488,15 @@ namespace frappe::mir {
                     emit(b, MirBranch{lhs, end, check_rhs});
                 }
                 emit(b, MirLabelInstruction{check_rhs});
+                MirValue rhs = lower_expr(b, be->right); // ← deferred
                 emit(b, MirMove{dest, rhs});
                 emit(b, MirLabelInstruction{end});
                 return MirValue{dest};
             }
-
+            // Non-short-circuit operators: both operands lowered in the
+            // current block.
+            MirValue lhs = lower_expr(b, be->left);
+            MirValue rhs = lower_expr(b, be->right);
             auto dest = new_temp(b, ty);
             emit(b, MirBinary{map_bin(be->op), dest, lhs, rhs});
             return MirValue{dest};
@@ -486,6 +514,29 @@ namespace frappe::mir {
         }
 
         [[nodiscard]] MirValue lower_member(MirBuilder *b, const ast::MemberExpr *me) {
+            // Enum variant access: `EnumName.VariantName` lowers to a
+            // constant, not a field load. Same interception as
+            // check_member — the object is an enum *name*, not a value.
+            if (me->object->kind == ast::ExprKind::Ident) {
+                auto *ie = static_cast<const ast::IdentExpr *>(me->object);
+                if (auto *sym = resolver::lookup(b->checker->resolver_, ie);
+                    sym && sym->kind == resolver::SymbolKind::Enum) {
+                    std::int64_t next = 0;
+                    for (auto *v: sym->decl.enum_->variants) {
+                        std::int64_t value = next;
+                        if (v->value && v->value->kind == ast::ExprKind::Int) {
+                            value = static_cast<const ast::IntExpr *>(v->value)->value;
+                        }
+                        if (v->name.text == me->name.text) {
+                            return MirValue{add_constant(b, MirConstant{value})};
+                        }
+                        next = value + 1;
+                    }
+                    // Checker already diagnosed; emit 0 defensively.
+                    return MirValue{add_constant(b, MirConstant{std::int64_t{0}})};
+                }
+            }
+
             MirValue object = lower_expr(b, me->object);
             const Type *ty = type_of(b, me);
             if (!ty) ty = b->checker->store.error_type;
@@ -574,22 +625,22 @@ namespace frappe::mir {
             bool is_virtual = false;
             std::optional<std::uint32_t> vtable_slot;
             if (callee_name.empty() && call->callee->kind == ast::ExprKind::Member) {
-                auto *me = static_cast<const ast::MemberExpr*> (call->callee);
+                auto *me = static_cast<const ast::MemberExpr *>(call->callee);
                 const Type *obj_ty = type_of(b, me->object);
                 if (obj_ty && obj_ty->kind == TypeKind::Named) {
-                    if (auto *nt = static_cast<const types::NamedType*>(obj_ty); nt->decl.kind == types::NamedDeclKind::Interface) {
+                    if (auto *nt = static_cast<const types::NamedType *>(obj_ty);
+                        nt->decl.kind == types::NamedDeclKind::Interface) {
                         auto *iface = nt->decl.interface_;
-                        if (auto iface_it = b->interface_slot_map.find(iface); iface_it != b->interface_slot_map.end()) {
+                        if (auto iface_it = b->interface_slot_map.find(iface);
+                            iface_it != b->interface_slot_map.end()) {
                             auto slot_it = iface_it->second.find(me->name.text);
                             if (slot_it != iface_it->second.end()) {
                                 is_virtual = true;
                                 vtable_slot = slot_it->second;
                                 callee_name = me->name.text;
-
                             }
                         }
                     }
-
                 }
             }
 
@@ -1006,9 +1057,11 @@ namespace frappe::mir {
             },
             .scope = std::pmr::unordered_map<const resolver::Symbol *, MirLocalId>{mr},
             .defer_stack = std::pmr::vector<std::pmr::vector<Defer_Block> >{mr},
+            .loop_stack = std::pmr::vector<LoopContext>{mr},
             .interface_slot_map = std::pmr::unordered_map<
                 const ast::InterfaceDecl *,
                 std::pmr::unordered_map<std::string_view, std::uint32_t> >{mr},
+
 
         };
         // Pass 0: Assign globally unique vtable slots to interface methods.

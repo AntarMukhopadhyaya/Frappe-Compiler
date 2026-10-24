@@ -1,25 +1,48 @@
-interface Greeter {
-    fn greet() -> Int;
+interface Animal {
+    fn name() -> String;
+    fn sound() -> String;
 }
 
-class Hello implements Greeter {
-    fn greet() -> Int {
-        return 7;
+class Dog implements Animal {
+
+    fn name() -> String { return  "Dog"; }
+    fn sound() -> String { return "Woof!";}
+}
+class Cat implements Animal {
+     fn name() -> String { return "Cat"; }
+     fn sound() -> String { return "Meow!"; }
+
+}
+
+class Cow implements Animal {
+    fn name() -> String { return "Cow"; }
+    fn sound() -> String { return "Moo!"; }
+}
+
+fn announce(a: Animal) {
+    println(a.name());
+    println(a.sound());
+    println("---");
+}
+
+fn main() {
+    let d = new Dog();
+    let c = new Cat();
+    let m = new Cow();
+
+
+    let animals: [Animal] = [ new Dog(), new Cat(), new Cow() ];
+    let i: Int = 0;
+    while (i < 3) {
+        announce(animals[i]);
+        i = i + 1;
     }
-}
+    let animals_2: [Animal;1] = [d,c,m];
 
-class Goodbye implements Greeter {
-    fn greet() -> Int {
-        return 3;
+    var j: Int = 0;
+    while(j < 10000) {
+
+        announce(animals_2[j]);
+        j += 1;
     }
-}
-
-fn call_greet(g: Greeter) -> Int {
-    return g.greet();
-}
-
-fn main() -> Int {
-    let h = new Hello();
-    let g = new Goodbye();
-    return call_greet(h) * 10 + call_greet(g);
 }

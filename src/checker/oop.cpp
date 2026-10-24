@@ -123,6 +123,28 @@ namespace frappe::checker::detail {
     }
 
     Type *check_member(Checker *c, const ast::MemberExpr *me) {
+        //Enum variant access: `EnumName.VariantName`. Enum names are not values
+        // so this path must intercept before calling check_expr on me->object
+        if (me->object->kind == ast::ExprKind::Ident) {
+            auto *ie = static_cast<const ast::IdentExpr *>(me->object);
+            if (auto *sym = resolver::lookup(c->resolver_, ie);
+                sym && sym->kind == resolver::SymbolKind::Enum) {
+                auto *ed = sym->decl.enum_;
+                for (auto *v: ed->variants) {
+                    if (v->name.text == me->name.text) {
+                        return bind_expr(c, me, types::named_type(&c->store,
+                                                                  types::NamedTypeDeclRef{
+                                                                      .kind = types::NamedDeclKind::Enum,
+                                                                      .enum_ = ed,
+                                                                  }));
+                    }
+                }
+                diagnostics::report_error(c->diag, me->name.span,
+                                          "enum '{}' has no variant '{}'",
+                                          ed->name.text, me->name.text);
+                return bind_expr(c, me, c->store.error_type);
+            }
+        }
         auto *obj_ty = check_expr(c, me->object);
         if (types::is_error(obj_ty)) return bind_expr(c, me, c->store.error_type);
         if (obj_ty->kind != TypeKind::Named) {

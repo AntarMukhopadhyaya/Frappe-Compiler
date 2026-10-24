@@ -22,23 +22,15 @@ namespace frappe::checker::detail {
         struct Context_Guard {
             Checker *c;
             Subst *saved_subst;
-            std::pmr::unordered_map<const void *, types::Type *> *saved_nt;
-            std::pmr::unordered_map<const void *, std::pmr::string> *saved_cn;
 
-            Context_Guard(Checker *chk, Subst *subst,
-                          std::pmr::unordered_map<const void *, types::Type *> *nt,
-                          std::pmr::unordered_map<const void *, std::pmr::string> *cn)
-                : c{chk}, saved_subst{chk->subst},
-                  saved_nt{chk->node_types_out}, saved_cn{chk->call_names_out} {
+            Context_Guard(Checker *chk, Subst *subst, Checked_Fn *inst) : c{chk}, saved_subst(chk->subst) {
                 c->subst = subst;
-                c->node_types_out = nt;
-                c->call_names_out = cn;
+                c->scope_stack.push_back(&inst->scope);
             }
 
             ~Context_Guard() {
+                c->scope_stack.pop_back();
                 c->subst = saved_subst;
-                c->node_types_out = saved_nt;
-                c->call_names_out = saved_cn;
             }
 
             Context_Guard(const Context_Guard &) = delete;
@@ -143,16 +135,17 @@ namespace frappe::checker::detail {
             inst->type_args = std::pmr::vector<types::Type *>{c->mr};
             inst->param_types = std::pmr::vector<types::Type *>{c->mr};
             inst->return_type = c->store.void_type;
-            inst->node_types = std::pmr::unordered_map<const void *, types::Type *>{c->mr};
-            inst->call_names = std::pmr::unordered_map<const void *, std::pmr::string>{c->mr};
+            // Initialize the instance's scope maps.
+            inst->scope.node_types = std::pmr::unordered_map<const void *, types::Type *>{c->mr};
+            inst->scope.symbol_types = std::pmr::unordered_map<const resolver::Symbol *, types::Type *>{c->mr};
+            inst->scope.call_names = std::pmr::unordered_map<const void *, std::pmr::string>{c->mr};
 
-            // Resolve params/return under the INSTANCE's context so caching doesn't
-            // leak into the global map and poison other instantiations of the same
-            // template (identity$String must not see identity$Int's T_node→Int).
+
+            // Pin the instance scope during param/return resolution so writes
+            // land in inst->scope rather than the globals.
             auto *old_subst = c->subst;
-            auto *old_nt = c->node_types_out;
             c->subst = subst;
-            c->node_types_out = &inst->node_types;
+            c->scope_stack.push_back(&inst->scope);
 
             for (auto *tp: fn->type_params) {
                 if (auto it = subst->bindings.find(tp->name.text); it != subst->bindings.end()) {
@@ -168,7 +161,7 @@ namespace frappe::checker::detail {
                 inst->return_type = resolve_ast_type(c, fn->return_type);
             }
 
-            c->node_types_out = old_nt;
+            c->scope_stack.pop_back();
             c->subst = old_subst;
 
             c->instances.emplace(inst->name, inst);
@@ -178,11 +171,7 @@ namespace frappe::checker::detail {
         }
 
         void check_pending(Checker *c, const Pending_Instance &pending) {
-            Context_Guard guard{
-                c, pending.subst,
-                &pending.inst->node_types,
-                &pending.inst->call_names
-            };
+            Context_Guard guard{c, pending.subst, pending.inst};
             check_fn_decl(c, pending.decl);
         }
 

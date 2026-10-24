@@ -79,7 +79,7 @@ namespace frappe::codegen::detail {
             if (it == ctx.state.label_blocks.end())
                 FRAPPE_UNREACHABLE({}, "codegen: unknown label {}", x.label.index);
             auto *current = ctx.builder.GetInsertBlock();
-            if (current && !current->getTerminator())
+            if (current && (current->empty() || !current->back().isTerminator()))
                 ctx.builder.CreateBr(it->second);
             ctx.builder.SetInsertPoint(it->second);
         }
@@ -426,6 +426,30 @@ namespace frappe::codegen::detail {
             auto *elem_llvm = llvm_type(ctx, elem_ty);
             auto *obj = load_value(ctx, x.object);
             auto *idx = load_value(ctx, x.index);
+            // Bounds check: length lives at obj[-1] (written by __frappe_alloc_array).
+            // Non-inbounds GEP for the header load — the payload pointer is opaque
+            // to LLVM, so claiming inbounds for a negative offset would be a promise
+            // it can't verify.
+            auto *len_ptr = ctx.builder.CreateGEP(
+                ctx.builder.getInt64Ty(), obj, ctx.builder.getInt64(-1), "lenp");
+            auto *len = ctx.builder.CreateLoad(ctx.builder.getInt64Ty(), len_ptr, "len");
+
+            auto *non_neg = ctx.builder.CreateICmpSGE(
+                idx, ctx.builder.getInt64(0), "idx_nn");
+            auto *lt_len = ctx.builder.CreateICmpSLT(idx, len, "idx_lt");
+            auto *ok = ctx.builder.CreateAnd(non_neg, lt_len, "idx_inrange");
+
+            auto *oob_block = llvm::BasicBlock::Create(
+                ctx.llvm, "idx_oob", ctx.state.llvm_fn);
+            auto *ok_block = llvm::BasicBlock::Create(
+                ctx.llvm, "idx_ok", ctx.state.llvm_fn);
+            ctx.builder.CreateCondBr(ok, ok_block, oob_block);
+
+            ctx.builder.SetInsertPoint(oob_block);
+            ctx.builder.CreateCall(ctx.rt_bounds_error, {idx, len});
+            ctx.builder.CreateUnreachable();
+
+            ctx.builder.SetInsertPoint(ok_block);
             auto *gep = ctx.builder.CreateInBoundsGEP(elem_llvm, obj, idx, "ep");
             auto *val = ctx.builder.CreateLoad(elem_llvm, gep, "ev");
             store_temp(ctx, x.destination, val);
@@ -442,6 +466,28 @@ namespace frappe::codegen::detail {
             auto *obj = load_value(ctx, x.object);
             auto *idx = load_value(ctx, x.index);
             auto *val = load_value(ctx, x.value);
+
+            // Same bounds check as handle_get_index.
+            auto *len_ptr = ctx.builder.CreateGEP(
+                ctx.builder.getInt64Ty(), obj, ctx.builder.getInt64(-1), "lenp");
+            auto *len = ctx.builder.CreateLoad(ctx.builder.getInt64Ty(), len_ptr, "len");
+
+            auto *non_neg = ctx.builder.CreateICmpSGE(
+                idx, ctx.builder.getInt64(0), "idx_nn");
+            auto *lt_len = ctx.builder.CreateICmpSLT(idx, len, "idx_lt");
+            auto *ok = ctx.builder.CreateAnd(non_neg, lt_len, "idx_inrange");
+
+            auto *oob_block = llvm::BasicBlock::Create(
+                ctx.llvm, "idx_oob", ctx.state.llvm_fn);
+            auto *ok_block = llvm::BasicBlock::Create(
+                ctx.llvm, "idx_ok", ctx.state.llvm_fn);
+            ctx.builder.CreateCondBr(ok, ok_block, oob_block);
+
+            ctx.builder.SetInsertPoint(oob_block);
+            ctx.builder.CreateCall(ctx.rt_bounds_error, {idx, len});
+            ctx.builder.CreateUnreachable();
+
+            ctx.builder.SetInsertPoint(ok_block);
             auto *gep = ctx.builder.CreateInBoundsGEP(elem_llvm, obj, idx);
             ctx.builder.CreateStore(val, gep);
         }
@@ -471,6 +517,8 @@ namespace frappe::codegen::detail {
     }
 
     void emit_function(CodegenContext &ctx, const mir::MirFunction &mfn, llvm::Function *fn) {
+        auto *entry = llvm::BasicBlock::Create(ctx.llvm, "entry", fn);
+
         std::unordered_map<std::uint32_t, llvm::BasicBlock *> labels;
         for (auto &inst: mfn.instructions) {
             if (auto *lbl = std::get_if<mir::MirLabelInstruction>(&inst)) {
@@ -481,7 +529,6 @@ namespace frappe::codegen::detail {
             }
         }
 
-        auto *entry = llvm::BasicBlock::Create(ctx.llvm, "entry", fn);
         ctx.builder.SetInsertPoint(entry);
 
         auto saved_state = std::move(ctx.state);
@@ -516,7 +563,7 @@ namespace frappe::codegen::detail {
 
         // Guarantee terminator
         auto *cur = ctx.builder.GetInsertBlock();
-        if (cur && !cur->getTerminator()) {
+        if (cur && (cur->empty() || !cur->back().isTerminator())) {
             if (fn->getReturnType()->isVoidTy()) ctx.builder.CreateRetVoid();
             else ctx.builder.CreateUnreachable();
         }
