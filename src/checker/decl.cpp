@@ -259,6 +259,7 @@ namespace frappe::checker::detail {
         void check_var_decl(Checker *c, const ast::VarDecl *vd) {
             if (vd->type_) {
                 auto *declared = resolve_ast_type(c, vd->type_);
+                set_type(c, vd, declared);
                 if (vd->init) {
                     auto *it = check_expr_against(c, vd->init, declared);
                     check_assignable(c, declared, it, vd->init->span);
@@ -268,6 +269,7 @@ namespace frappe::checker::detail {
                 }
             } else if (vd->init) {
                 auto *it = check_expr(c, vd->init);
+                set_type(c, vd, it);
                 if (auto *sym = resolver::lookup(c->resolver_, vd); sym) {
                     set_symbol_type(c, sym, it);
                 }

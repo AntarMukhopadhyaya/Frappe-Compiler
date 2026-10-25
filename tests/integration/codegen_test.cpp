@@ -76,7 +76,7 @@ TEST_CASE("codegen: return constant emits ret i64", "[codegen]") {
 }
 
 TEST_CASE("codegen: return arithmetic emits add", "[codegen]") {
-    auto r = compile_to_ir("fn main() -> Int { return 1 + 2; }");
+    auto r = compile_to_ir("fn main() -> Int { let a = 1; let b = 2; return a + b; }");
     REQUIRE_FALSE(r.compile->has_errors());
     if (r.skip) {
         SUCCEED("codegen not built (FRAPPE_LLVM=OFF)");
@@ -88,7 +88,7 @@ TEST_CASE("codegen: return arithmetic emits add", "[codegen]") {
 
 TEST_CASE("codegen: integer arithmetic chain emits multiple adds",
           "[codegen]") {
-    auto r = compile_to_ir("fn main() -> Int { return 1 + 2 + 3; }");
+    auto r = compile_to_ir("fn main() -> Int { let a = 2; let b = 3; let c = 4; return a + b + c; }");
     REQUIRE_FALSE(r.compile->has_errors());
     if (r.skip) {
         SUCCEED("codegen not built (FRAPPE_LLVM=OFF)");
@@ -112,9 +112,10 @@ TEST_CASE("codegen: string literal emits private global", "[codegen]") {
 
 TEST_CASE("codegen: if statement emits conditional branch", "[codegen]") {
     auto r = compile_to_ir(R"(
-fn main(c: Bool) {
+fn test_if(c: Bool) {
     if (c) { }
 }
+fn main() { }
 )");
     REQUIRE_FALSE(r.compile->has_errors());
     if (r.skip) {
@@ -127,13 +128,14 @@ fn main(c: Bool) {
 
 TEST_CASE("codegen: while loop emits icmp and branch", "[codegen]") {
     auto r = compile_to_ir(R"(
-fn main(n: Int) -> Int {
+fn test_while(n: Int) -> Int {
     var i: Int = 0;
     while (i < n) {
         i = i + 1;
     }
     return i;
 }
+fn main() { }
 )");
     REQUIRE_FALSE(r.compile->has_errors());
     if (r.skip) {
@@ -430,7 +432,7 @@ fn main() { }
     REQUIRE_FALSE(r.compile->has_errors());
     if (r.skip) { SUCCEED("codegen not built (FRAPPE_LLVM=OFF)"); return; }
 
-    REQUIRE(frappe_test::ir_contains(*r.ir, "getelementptr inbounds %P"));
+    REQUIRE(frappe_test::ir_contains(*r.ir, "getelementptr inbounds nuw %P"));
     REQUIRE(frappe_test::ir_contains(*r.ir, "load i64"));
 }
 
@@ -447,7 +449,7 @@ fn main() { }
     REQUIRE_FALSE(r.compile->has_errors());
     if (r.skip) { SUCCEED("codegen not built (FRAPPE_LLVM=OFF)"); return; }
 
-    REQUIRE(frappe_test::ir_contains(*r.ir, "getelementptr inbounds %P"));
+    REQUIRE(frappe_test::ir_contains(*r.ir, "getelementptr inbounds nuw %P"));
     REQUIRE(frappe_test::ir_contains(*r.ir, "store i64"));
 }
 

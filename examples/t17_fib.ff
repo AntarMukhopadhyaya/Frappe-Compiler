@@ -1,0 +1,31 @@
+fn fib_rec(n: Int) -> Int {
+    if (n < 2) { return n; }
+    return fib_rec(n - 1) + fib_rec(n - 2);
+}
+
+fn fib_iter(n: Int) -> Int {
+    var a: Int = 0;
+    var b: Int = 1;
+    var i: Int = 0;
+    while (i < n) {
+        let t: Int = a + b;
+        a = b;
+        b = t;
+        i = i + 1;
+    }
+    return a;
+}
+
+fn main() {
+    println("-- correctness --");
+    println(fib_rec(10));     // 55
+    println(fib_iter(10));    // 55
+    println(fib_rec(20));     // 6765
+    println(fib_iter(20));    // 6765
+
+    println("-- rec(30) --");
+    println(fib_rec(30));     // 832040
+
+    println("-- iter(90) --");
+    println(fib_iter(90));    // 2880067194370816120 (max i64-ish range)
+}

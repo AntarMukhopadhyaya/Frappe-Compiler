@@ -6,6 +6,7 @@
 #include <frappe/mir/builder.hpp>
 #include <fstream>
 #include <sstream>
+#include <algorithm>
 
 namespace frappe_test {
     namespace {
@@ -199,23 +200,29 @@ namespace frappe_test {
         return std::format("{}/{}", FRAPPE_PROJECT_ROOT, rel);
     }
 
+    // tests/helpers/compile.cpp
     std::optional<std::string> build_ir(Compile_Result &r) {
         if (r.has_errors()) return std::nullopt;
 
         auto mir = frappe::mir::build_module(
             r.program, &*r.checker, &r.engine, &r.arena);
-        if (frappe::diagnostics::has_errors(&r.engine)) return std::nullopt;
+        if (frappe::diagnostics::has_errors(&r.engine)) {
+            collect_errors(&r);
+            return std::nullopt;
+        }
 
 #ifndef FRAPPE_LLVM_ENABLED
         (void) mir;
-        return std::nullopt;
+        return std::nullopt;   // ← only legitimate nullopt when LLVM is off
 #else
         auto ir = frappe::codegen::emit_llvm_ir(
             mir,
             frappe::codegen::EmitOptions{.module_name = "test"},
             &r.engine);
-        if (frappe::diagnostics::has_errors(&r.engine)) return std::nullopt;
-
+        if (frappe::diagnostics::has_errors(&r.engine)) {
+            collect_errors(&r);   // ← capture LLVM error into r.errors
+            return std::nullopt;   // caller can distinguish via has_errors()
+        }
         return ir;
 #endif
     }

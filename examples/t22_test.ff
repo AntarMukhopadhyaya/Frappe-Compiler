@@ -1,0 +1,7 @@
+class P {
+    public x: Int;
+    fn get() -> Int {
+        return this.x;
+    }
+}
+fn main() { }

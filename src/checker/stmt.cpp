@@ -28,6 +28,7 @@ namespace frappe::checker::detail {
         void check_var_stmt(Checker *c, const ast::VarStmt *vs) {
             if (vs->type_) {
                 auto *declared = resolve_ast_type(c, vs->type_);
+                set_type(c, vs, declared);
                 if (vs->init) {
                     auto *it = check_expr_against(c, vs->init, declared);
                     check_assignable(c, declared, it, vs->init->span);
@@ -38,6 +39,7 @@ namespace frappe::checker::detail {
             } else if (vs->init) {
                 auto *it = check_expr(c, vs->init);
                 if (types::is_error(it)) return;
+                set_type(c, vs, it);
                 if (it->kind == TypeKind::Builtin) {
                     auto *bt = static_cast<const types::BuiltinType *>(it);
                     if (bt->b == resolver::Builtin::Nil) {

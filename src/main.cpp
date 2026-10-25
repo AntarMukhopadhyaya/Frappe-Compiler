@@ -18,31 +18,39 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <filesystem>
 
-#include <unistd.h>
+
+#ifdef  _WIN32
+#include <process.h>
+#define frappe_getpid _getpid
+#else
+# include <unistd.h>
+# define frappe_getpid getpid
+#endif
 
 namespace {
     struct Options {
         std::string input;
         std::string output;
-        bool dump_tokens  = false;
-        bool dump_ast     = false;
-        bool dump_mir     = false;
+        bool dump_tokens = false;
+        bool dump_ast = false;
+        bool dump_mir = false;
         bool dump_llvm_ir = false;
-        bool run          = false;
+        bool run = false;
         frappe::codegen::OptLevel opt_level = frappe::codegen::OptLevel::None;
     };
 
     void usage() {
         std::fprintf(stderr,
-            "usage: frappe [options] <source_file>\n"
-            "  --tokens             dump tokens and exit\n"
-            "  --ast                dump AST (then continue)\n"
-            "  --mir                dump MIR and exit\n"
-            "  --llvm-ir            dump LLVM IR and exit\n"
-            "  --opt=0|1|2|3        optimization level (default 0)\n"
-            "  -o, --emit <path>    compile to executable at <path>\n"
-            "  --run                compile to a temp executable and run it\n");
+                     "usage: frappe [options] <source_file>\n"
+                     "  --tokens             dump tokens and exit\n"
+                     "  --ast                dump AST (then continue)\n"
+                     "  --mir                dump MIR and exit\n"
+                     "  --llvm-ir            dump LLVM IR and exit\n"
+                     "  --opt=0|1|2|3        optimization level (default 0)\n"
+                     "  -o, --emit <path>    compile to executable at <path>\n"
+                     "  --run                compile to a temp executable and run it\n");
     }
 
     bool parse_args(int argc, char **argv, Options *out) {
@@ -111,14 +119,49 @@ namespace {
     }
 
     std::string make_temp_exe_path() {
-        const char* tmp = std::getenv("TMPDIR");
-        std::string dir = tmp ? tmp : "/tmp";
-        dir += "/frappe_";
-        dir += std::to_string(::getpid());
-        return dir;
+        std::string dir;
+#ifdef _WIN32
+        char *tmp = nullptr;
+        size_t len = 0;
+        if (_dupenv_s(&tmp, &len, "TEMP") == 0 && tmp) {
+            dir = tmp;
+        }
+        free(tmp);
+        if (dir.empty()) {
+            tmp = nullptr;
+            if (_dupenv_s(&tmp, &len, "TMP") == 0 && tmp) {
+                dir = tmp;
+            }
+            free(tmp);
+        }
+#else
+        const char *tmp = std::getenv("TMPDIR");
+        if (!tmp) tmp = std::getenv("TEMP");
+        if (!tmp) tmp = std::getenv("TMP");
+
+        if (tmp) {
+            dir = tmp;
+        }
+#endif
+
+        if (dir.empty()) {
+            dir = ".";
+        }
+        std::string basename = "frappe_" + std::to_string(frappe_getpid());
+#ifdef _WIN32
+        basename += ".exe"; // ← ADD
+#endif
+        return (std::filesystem::path(dir) / basename).string();
     }
 
     int run_executable(const std::string& path) {
+#ifdef _WIN32
+        // Windows: std::system returns the child exit code directly. No
+        // POSIX wait-status encoding. Quote path so spaces in TEMP work.
+        std::string quoted = "\"" + path + "\"";
+        int rc = std::system(quoted.c_str());
+        return rc == -1 ? 1 : rc;
+#else
         int rc = std::system(path.c_str());
         if (rc == -1) {
             std::fprintf(stderr, "frappe: failed to invoke %s\n", path.c_str());
@@ -132,6 +175,7 @@ namespace {
             return 128 + sig;
         }
         return (rc >> 8) & 0xff;
+#endif
     }
 } // namespace
 
@@ -156,7 +200,7 @@ int main(int argc, char **argv) {
 
     auto engine = frappe::diagnostics::make_engine(&arena);
 
-    auto lexer  = frappe::lexer::make_lexer(source, &engine, &arena);
+    auto lexer = frappe::lexer::make_lexer(source, &engine, &arena);
     auto tokens = frappe::lexer::tokenize(&lexer);
     if (frappe::diagnostics::has_errors(&engine)) {
         frappe::diagnostics::print(&engine);
@@ -197,7 +241,7 @@ int main(int argc, char **argv) {
     }
 
     const bool need_mir = opts.dump_mir || opts.dump_llvm_ir
-                       || opts.run      || !opts.output.empty();
+                          || opts.run || !opts.output.empty();
     if (!need_mir) {
         if (!opts.dump_ast) {
             std::printf("checked %zu decls\n", program.decls.size());
@@ -219,14 +263,14 @@ int main(int argc, char **argv) {
     }
 
     const bool need_ir = opts.dump_llvm_ir
-                      || opts.run || !opts.output.empty();
+                         || opts.run || !opts.output.empty();
     std::string llvm_ir;
     if (need_ir) {
         llvm_ir = frappe::codegen::emit_llvm_ir(
             mod,
             frappe::codegen::EmitOptions{
                 .module_name = opts.input,
-                .opt_level   = opts.opt_level,
+                .opt_level = opts.opt_level,
             },
             &engine);
 

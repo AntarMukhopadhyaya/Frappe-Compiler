@@ -32,17 +32,10 @@ fn main() {
 
 
     let animals: [Animal] = [ new Dog(), new Cat(), new Cow() ];
-    let i: Int = 0;
+    var i: Int = 0;
     while (i < 3) {
         announce(animals[i]);
         i = i + 1;
     }
-    let animals_2: [Animal;1] = [d,c,m];
 
-    var j: Int = 0;
-    while(j < 10000) {
-
-        announce(animals_2[j]);
-        j += 1;
-    }
 }

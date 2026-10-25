@@ -36,12 +36,13 @@ TEST_CASE("vtable-ir: class without interfaces has vptr in struct layout",
           "[vtable][codegen]") {
     auto r = compile_to_ir(R"(
 class Point { public x: Int; }
-fn main() { }
+fn main() {
+    let p = new Point();
+}
 )");
     REQUIRE_FALSE(r.compile->has_errors());
     if (r.skip) { SUCCEED("codegen not built"); return; }
 
-    // The struct must be { ptr, i64 } — vptr at index 0, x at index 1.
     REQUIRE(frappe_test::ir_contains(*r.ir, "%Point = type { ptr, i64 }"));
 }
 
@@ -49,11 +50,15 @@ TEST_CASE("vtable-ir: class with interface has vptr in struct layout",
           "[vtable][codegen]") {
     auto r = compile_to_ir(R"(
 interface Speaker { fn speak() -> Int; }
+
 class Dog implements Speaker {
     public name: Int;
     fn speak() -> Int { return 1; }
 }
-fn main() { }
+
+fn main() {
+    let dog = new Dog();
+}
 )");
     REQUIRE_FALSE(r.compile->has_errors());
     if (r.skip) { SUCCEED("codegen not built"); return; }
@@ -77,7 +82,7 @@ fn main() { }
 
     REQUIRE(frappe_test::ir_contains(*r.ir, "@Dog.vtable"));
     REQUIRE(frappe_test::ir_contains(*r.ir, "constant [1 x ptr]"));
-    REQUIRE(frappe_test::ir_contains(*r.ir, "@\"Dog.speak\""));
+    REQUIRE(frappe_test::ir_contains(*r.ir, "@Dog.speak"));    // ← no quotes
 }
 
 TEST_CASE("vtable-ir: class without interface has no vtable global",
@@ -110,8 +115,8 @@ fn main() { }
 
     REQUIRE(frappe_test::ir_contains(*r.ir, "@Dog.vtable"));
     REQUIRE(frappe_test::ir_contains(*r.ir, "constant [2 x ptr]"));
-    REQUIRE(frappe_test::ir_contains(*r.ir, "@\"Dog.speak\""));
-    REQUIRE(frappe_test::ir_contains(*r.ir, "@\"Dog.eat\""));
+    REQUIRE(frappe_test::ir_contains(*r.ir, "@Dog.speak"));
+    REQUIRE(frappe_test::ir_contains(*r.ir, "@Dog.eat"));
 }
 
 // ============================================================================
@@ -186,22 +191,16 @@ fn main() {
     if (r.skip) { SUCCEED("codegen not built"); return; }
 
     // Direct call to @Dog.speak, not indirect.
-    REQUIRE(frappe_test::ir_contains(*r.ir, "@\"Dog.speak\""));
-    // No vptr load for direct calls.
-    REQUIRE_FALSE(frappe_test::ir_contains(*r.ir, "vptr"));
+    REQUIRE(frappe_test::ir_contains(*r.ir, "@Dog.speak"));
+
+    // No virtual dispatch: no vfn slot load, no indirect call.
+    // (The '%vptr_slot' in the `new` path is the null vptr store from
+    // the uniform-layout design — it appears for every class, not just
+    // interface implementors. It's not virtual dispatch.)
+    REQUIRE_FALSE(frappe_test::ir_contains(*r.ir, "vfn"));
+    REQUIRE_FALSE(frappe_test::ir_contains(*r.ir, "call i64 %"));
 }
 
-// ============================================================================
-// End-to-end behavioral — run under lli
-// ============================================================================
-
-TEST_CASE("vtable-behavior: interface dispatch returns correct value",
-          "[vtable][behavior]") {
-    // This program only needs __frappe_alloc, so compile_and_run skips
-    // (it requires clang + libfrappe_rt.a). Deferred until --run exists.
-    // Structural test above proves dispatch shape is emitted correctly.
-    SUCCEED("behavioral interface dispatch deferred until --run round");
-}
 
 // ============================================================================
 // Regression: existing class tests still pass
@@ -220,6 +219,6 @@ fn main() { }
     if (r.skip) { SUCCEED("codegen not built"); return; }
 
     // GEP must use index 1 (vptr at 0, x at 1).
-    REQUIRE(frappe_test::ir_contains(*r.ir, "getelementptr inbounds %Point, ptr"));
+    REQUIRE(frappe_test::ir_contains(*r.ir, "getelementptr inbounds nuw %Point, ptr"));
     REQUIRE(frappe_test::ir_contains(*r.ir, "i32 0, i32 1"));
 }

@@ -30,16 +30,17 @@ namespace frappe::codegen::detail {
     using mir::MirValue;
 
     namespace {
-        [[nodiscard]] llvm::StructType *string_struct_type(llvm::LLVMContext &c) {
-            return llvm::StructType::get(c, {
-                                             llvm::PointerType::getUnqual(c),
-                                             llvm::Type::getInt64Ty(c),
-                                         });
-        }
+
 
         [[nodiscard]] llvm::StringRef to_ref(std::string_view s) {
             return {s.data(), s.size()};
         }
+    }
+    [[nodiscard]] llvm::StructType *string_struct_type(llvm::LLVMContext &c) {
+        return llvm::StructType::get(c, {
+                                         llvm::PointerType::getUnqual(c),
+                                         llvm::Type::getInt64Ty(c),
+                                     });
     }
 
     void initialize_llvm_targets() {
@@ -218,7 +219,7 @@ namespace frappe::codegen::detail {
         return std::visit([&](auto &&c) -> llvm::Value * {
             using T = std::decay_t<decltype(c)>;
             if constexpr (std::is_same_v<T, std::int64_t>) {
-                return ctx.builder.getInt64(c);
+                return llvm::ConstantInt::getSigned(ctx.builder.getInt64Ty(), c);
             } else if constexpr (std::is_same_v<T, double>) {
                 return llvm::ConstantFP::get(ctx.builder.getDoubleTy(), c);
             } else if constexpr (std::is_same_v<T, bool>) {
@@ -281,7 +282,6 @@ namespace frappe::codegen::detail {
         auto *dbl = ctx.builder.getDoubleTy();
         auto *ptr = ctx.builder.getPtrTy();
         auto *void_ty = ctx.builder.getVoidTy();
-        auto *str_ty = string_struct_type(ctx.llvm);
 
         auto make_fn = [&](llvm::StringRef name, llvm::FunctionType *ft) {
             return llvm::Function::Create(ft, llvm::Function::ExternalLinkage, name, &ctx.mod);
@@ -300,18 +300,25 @@ namespace frappe::codegen::detail {
 
         ctx.rt_alloc = make_fn("__frappe_alloc", llvm::FunctionType::get(ptr, {i64}, false));
         ctx.rt_alloc_array = make_fn("__frappe_alloc_array", llvm::FunctionType::get(ptr, {i64, i64}, false));
-        ctx.rt_panic = make_fn("__frappe_panic", llvm::FunctionType::get(void_ty, {str_ty}, false));
+        // ---- String ABI: pointer-based on all platforms. ----
+        ctx.rt_panic = decl("__frappe_panic",
+                            llvm::FunctionType::get(void_ty, {ptr}, false));
         ctx.rt_panic->addFnAttr(llvm::Attribute::NoReturn);
-        ctx.rt_str_concat = make_fn("__frappe_str_concat", llvm::FunctionType::get(str_ty, {str_ty, str_ty}, false));
-        ctx.rt_str_eq = make_fn("__frappe_str_eq", llvm::FunctionType::get(i64, {str_ty, str_ty}, false));
-        ctx.rt_println_int = decl("__frappe_println_int",
-                                  llvm::FunctionType::get(void_ty, {i64}, false));
-        ctx.rt_println_float = decl("__frappe_println_float",
-                                    llvm::FunctionType::get(void_ty, {dbl}, false));
+
+        ctx.rt_str_concat = decl("__frappe_str_concat",
+            llvm::FunctionType::get(void_ty, {ptr, ptr, ptr}, false));
+        ctx.rt_str_eq = decl("__frappe_str_eq",
+            llvm::FunctionType::get(i64, {ptr, ptr}, false));
         ctx.rt_println_str = decl("__frappe_println_str",
-                                  llvm::FunctionType::get(void_ty, {str_ty}, false));
+            llvm::FunctionType::get(void_ty, {ptr}, false));
+
+        ctx.rt_println_int = decl("__frappe_println_int",
+            llvm::FunctionType::get(void_ty, {i64}, false));
+        ctx.rt_println_float = decl("__frappe_println_float",
+            llvm::FunctionType::get(void_ty, {dbl}, false));
+
         ctx.rt_bounds_error = decl("__frappe_bounds_error",
-                                   llvm::FunctionType::get(void_ty, {i64, i64}, false));
+            llvm::FunctionType::get(void_ty, {i64, i64}, false));
         ctx.rt_bounds_error->addFnAttr(llvm::Attribute::NoReturn);
     }
 
@@ -542,7 +549,7 @@ namespace frappe::codegen {
         }
 
         // 3. clang reads ll_path, writes exe_path. Different files.
-        std::string cmd = "clang ";
+        std::string cmd = "clang -Wno-override-module ";
         cmd += ll_path;
         cmd += ' ';
         cmd += rt;

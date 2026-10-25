@@ -52,6 +52,11 @@ target_link_libraries(frappe_tests PRIVATE
         frappe_core
         Catch2::Catch2WithMain
 )
+target_link_libraries(frappe_tests PRIVATE frappe_codegen)
+
+if (FRAPPE_LLVM)
+    target_compile_definitions(frappe_tests PRIVATE FRAPPE_LLVM_ENABLED)
+endif ()
 
 # ---------------------------------------------------------------------------
 # 4. Include paths

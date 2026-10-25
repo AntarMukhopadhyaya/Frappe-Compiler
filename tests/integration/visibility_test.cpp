@@ -276,7 +276,7 @@ let leaked = global_cfg.secret;
 // Mixed visibility on same class — only restricted members warn
 // ============================================================================
 
-TEST_CASE("mix of public and private members — only private access errors",
+TEST_CASE("mix of public and private members - only private access errors",
           "[visibility]") {
     auto r = frappe_test::compile(R"(
 class Foo {

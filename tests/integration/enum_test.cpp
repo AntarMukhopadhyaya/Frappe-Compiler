@@ -306,3 +306,47 @@ fn main() { }
 
     REQUIRE(frappe_test::ir_contains(*ir, "icmp eq i64"));
 }
+
+TEST_CASE("enum: inferred local var has i64 codegen type",
+          "[enum][codegen][core]") {
+    auto r = frappe_test::compile(R"(
+enum Color { Red, Green, Blue }
+fn first(c: Color) -> Int { return 0; }
+fn main() {
+    let c = Color.Red;
+    let x = first(c);
+}
+)");
+    REQUIRE_FALSE(r->has_errors());
+    auto ir = frappe_test::build_ir(*r);
+    if (!ir) {
+        for (const auto &e : r->errors) {
+            UNSCOPED_INFO("[codegen error] " << e.message);
+        }
+        FAIL("codegen failed to produce verifier-clean IR");
+        return;
+    }
+    CHECK(frappe_test::ir_contains(*ir, "alloca i64"));
+    CHECK(frappe_test::ir_contains(*ir, "call i64 @first(i64"));
+}
+
+TEST_CASE("inferred int local has correct codegen type",
+          "[codegen][regression]") {
+    auto r = frappe_test::compile(R"(
+fn use(x: Int) -> Int { return x; }
+fn main() {
+    let y = 5;
+    let z = use(y);
+}
+)");
+    REQUIRE_FALSE(r->has_errors());
+    auto ir = frappe_test::build_ir(*r);
+    if (!ir) {
+        for (const auto &e : r->errors) {
+            UNSCOPED_INFO("[codegen error] " << e.message);
+        }
+        FAIL("codegen failed to produce verifier-clean IR");
+        return;
+    }
+    CHECK(frappe_test::ir_contains(*ir, "alloca i64"));
+}

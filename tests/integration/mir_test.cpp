@@ -160,7 +160,7 @@ fn work() {
     REQUIRE(frappe_test::count_calls_to(*fn, "R.close") == 0);
 }
 
-TEST_CASE("panic terminates block — no instructions after", "[mir][defer][panic]") {
+TEST_CASE("panic terminates block - no instructions after", "[mir][defer][panic]") {
     auto r = frappe_test::compile(R"(
 fn work() {
     panic("boom");
@@ -385,7 +385,7 @@ fn work() {
     REQUIRE(frappe_test::count_calls_to(*fn, "R.ca") == 1);
 }
 
-TEST_CASE("defer and ordinary call in same block — defer fires after",
+TEST_CASE("defer and ordinary call in same block - defer fires after",
           "[mir][defer][edge]") {
     // Non-deferred calls execute at their source position.
     // The defer fires at block exit, after all normal statements.
@@ -488,7 +488,7 @@ fn work(c: Bool) {
     REQUIRE(frappe_test::labels_defined(*fn));
 }
 
-TEST_CASE("if with both branches returning — no fall-through",
+TEST_CASE("if with both branches returning - no fall-through",
           "[mir][control]") {
     auto r = frappe_test::compile(R"(
 fn work(c: Bool) -> Int {
@@ -774,7 +774,7 @@ fn work() -> Int {
     }
 }
 
-TEST_CASE("while body with return — no fall-through return emitted",
+TEST_CASE("while body with return - no fall-through return emitted",
           "[mir][control]") {
     auto r = frappe_test::compile(R"(
 fn work(c: Bool) -> Int {
@@ -799,7 +799,7 @@ fn work(c: Bool) -> Int {
     REQUIRE(frappe_test::labels_defined(*fn));
 }
 
-TEST_CASE("for body with return — no fall-through return emitted",
+TEST_CASE("for body with return - no fall-through return emitted",
           "[mir][control]") {
     auto r = frappe_test::compile(R"(
 fn work(n: Int) -> Int {
@@ -1002,7 +1002,7 @@ fn work(a: Bool, b: Bool) -> Int {
 // Switch — bugs the current lowering still has
 // ============================================================================
 
-TEST_CASE("switch case with panic — no dead jump after",
+TEST_CASE("switch case with panic - no dead jump after",
           "[mir][control][switch]") {
     auto r = frappe_test::compile(R"(
 fn work(x: Int) {
@@ -1020,7 +1020,7 @@ fn work(x: Int) {
     REQUIRE(frappe_test::is_well_formed(*fn));
 }
 
-TEST_CASE("switch where every case returns — no fall-through return",
+TEST_CASE("switch where every case returns - no fall-through return",
           "[mir][control][switch]") {
     auto r = frappe_test::compile(R"(
 fn work(x: Int) -> Int {
@@ -1044,7 +1044,7 @@ fn work(x: Int) -> Int {
     REQUIRE(frappe_test::is_well_formed(*fn));
 }
 
-TEST_CASE("switch where case and default terminate — no orphan Lend",
+TEST_CASE("switch where case and default terminate - no orphan Lend",
           "[mir][control][switch]") {
     auto r = frappe_test::compile(R"(
 fn work(x: Int) -> Int {

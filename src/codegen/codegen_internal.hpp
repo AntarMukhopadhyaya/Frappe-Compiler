@@ -96,4 +96,6 @@ namespace frappe::codegen::detail {
     void emit_instruction(CodegenContext &, const mir::MirInstruction &);
 
     void emit_vtables(CodegenContext &);
+    [[nodiscard]] llvm::StructType *string_struct_type(llvm::LLVMContext &c);
+
 } // namespace frappe::codegen::detail

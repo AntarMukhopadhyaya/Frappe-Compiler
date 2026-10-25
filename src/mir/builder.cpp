@@ -196,6 +196,14 @@ namespace frappe::mir {
                     auto *vs = static_cast<const ast::VarStmt *>(s);
                     auto *sym = resolver::lookup(b->checker->resolver_, vs);
                     const Type *ty = type_of(b, vs);
+                    if (!ty && sym) {
+                        // Fallback: checker should have set the VarStmt node type, but if
+                        // it didn't, the symbol's inferred type is authoritative.
+                        if (auto it = b->checker->symbol_types.find(sym);
+                            it != b->checker->symbol_types.end()) {
+                            ty = it->second;
+                        }
+                    }
                     if (!ty && vs->type_) ty = resolve_type_node(b, vs->type_);
                     if (!ty) ty = b->checker->store.unknown_type;
                     MirValue init = lower_expr(b, vs->init);

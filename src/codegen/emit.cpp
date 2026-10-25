@@ -48,6 +48,20 @@ namespace frappe::codegen::detail {
             return b == Builtin::UInt8 || b == Builtin::UInt16
                    || b == Builtin::UInt32 || b == Builtin::UInt64;
         }
+        [[nodiscard]] llvm::Value* pass_by_pointer(CodegenContext& ctx,
+           llvm::Value* v, std::string_view hint) {
+            auto* slot = ctx.builder.CreateAlloca(
+                v->getType(), nullptr, std::string(hint) + "_byval");
+            ctx.builder.CreateStore(v, slot);
+            return slot;
+        }
+        // True iff `t` is Frappe's fat-pointer string struct: `{ ptr, i64 }`.
+        [[nodiscard]] bool is_string_llvm_type(const llvm::Type* t) {
+            auto* st = llvm::dyn_cast<llvm::StructType>(t);
+            if (!st || st->getNumElements() != 2) return false;
+            return st->getElementType(0)->isPointerTy()
+                && st->getElementType(1)->isIntegerTy(64);
+        }
 
         [[nodiscard]] const types::Type *
         pick_operand_type(CodegenContext &ctx, const mir::MirBinary &x) {
@@ -108,17 +122,21 @@ namespace frappe::codegen::detail {
             llvm::Value *result = nullptr;
 
             if (is_string_type(elem_ty)) {
+                auto* str_llvm_ty = string_struct_type(ctx.llvm);
                 if (x.op == MirBinaryOp::Add) {
-                    result = ctx.builder.CreateCall(
-                        ctx.rt_str_concat, {lhs, rhs}, "cat");
+                   auto* out_slot = ctx.builder.CreateAlloca(str_llvm_ty, nullptr,
+                       "cat_out");
+                    auto* a_ptr = pass_by_pointer(ctx, lhs, "cat_a");
+                    auto* b_ptr = pass_by_pointer(ctx, rhs, "cat_b");
+                    ctx.builder.CreateCall(ctx.rt_str_concat, {out_slot, a_ptr, b_ptr});
+                    result = ctx.builder.CreateLoad(str_llvm_ty, out_slot, "cat");
                 } else if (x.op == MirBinaryOp::Eq ||
                            x.op == MirBinaryOp::Neq) {
-                    auto *r = ctx.builder.CreateCall(
-                        ctx.rt_str_eq, {lhs, rhs}, "seq");
-
-                    auto *eq = ctx.builder.CreateICmpNE(
+                    auto* a_ptr = pass_by_pointer(ctx, lhs, "seq_a");
+                    auto* b_ptr = pass_by_pointer(ctx, rhs, "seq_b");
+                    auto* r = ctx.builder.CreateCall(ctx.rt_str_eq, {a_ptr, b_ptr}, "seq");
+                    auto* eq = ctx.builder.CreateICmpNE(
                         r, ctx.builder.getInt64(0), "seqeq");
-
                     result = x.op == MirBinaryOp::Eq
                                  ? eq
                                  : ctx.builder.CreateNot(eq, "sneq");
@@ -294,9 +312,27 @@ namespace frappe::codegen::detail {
                 return;
             }
 
-            std::vector<llvm::Value *> args;
+            auto* fn_ty = fn->getFunctionType();
+            std::vector<llvm::Value*> args;
             args.reserve(x.args.size());
-            for (auto &a: x.args) args.push_back(load_value(ctx, a));
+            for (std::size_t i = 0; i < x.args.size(); ++i) {
+                auto* v = load_value(ctx, x.args[i]);
+
+                // If the callee expects `ptr` at position i but the value is a
+                // `{ptr, i64}` string struct, materialize the struct to a stack slot
+                // and pass its address. This handles every pointer-based runtime
+                // function uniformly and stays neutral for user-defined by-value
+                // functions (whose LLVM signature matches their struct param type).
+                const bool wants_ptr =
+                    i < fn_ty->getNumParams()
+                    && fn_ty->getParamType(static_cast<unsigned>(i))->isPointerTy();
+                if (wants_ptr && is_string_llvm_type(v->getType())) {
+                    args.push_back(pass_by_pointer(ctx, v, "str_arg"));
+                } else {
+                    args.push_back(v);
+                }
+            }
+
 
             auto *call = ctx.builder.CreateCall(fn, args);
             if (x.destination) store_temp(ctx, *x.destination, call);
@@ -313,9 +349,10 @@ namespace frappe::codegen::detail {
             }
         }
 
-        void handle_panic(CodegenContext &ctx, const mir::MirPanic &x) {
-            auto *msg = load_value(ctx, x.message);
-            ctx.builder.CreateCall(ctx.rt_panic, {msg});
+        void handle_panic(CodegenContext& ctx, const mir::MirPanic& x) {
+            auto* msg = load_value(ctx, x.message);
+            auto* msg_ptr = pass_by_pointer(ctx, msg, "panic_msg");
+            ctx.builder.CreateCall(ctx.rt_panic, {msg_ptr});
             ctx.builder.CreateUnreachable();
         }
 
@@ -431,7 +468,7 @@ namespace frappe::codegen::detail {
             // to LLVM, so claiming inbounds for a negative offset would be a promise
             // it can't verify.
             auto *len_ptr = ctx.builder.CreateGEP(
-                ctx.builder.getInt64Ty(), obj, ctx.builder.getInt64(-1), "lenp");
+                ctx.builder.getInt64Ty(), obj, llvm::ConstantInt::getSigned(ctx.builder.getInt64Ty(), -1), "lenp");
             auto *len = ctx.builder.CreateLoad(ctx.builder.getInt64Ty(), len_ptr, "len");
 
             auto *non_neg = ctx.builder.CreateICmpSGE(
@@ -469,7 +506,7 @@ namespace frappe::codegen::detail {
 
             // Same bounds check as handle_get_index.
             auto *len_ptr = ctx.builder.CreateGEP(
-                ctx.builder.getInt64Ty(), obj, ctx.builder.getInt64(-1), "lenp");
+                ctx.builder.getInt64Ty(), obj, llvm::ConstantInt::getSigned(ctx.builder.getInt64Ty(), -1), "lenp");
             auto *len = ctx.builder.CreateLoad(ctx.builder.getInt64Ty(), len_ptr, "len");
 
             auto *non_neg = ctx.builder.CreateICmpSGE(
@@ -491,6 +528,7 @@ namespace frappe::codegen::detail {
             auto *gep = ctx.builder.CreateInBoundsGEP(elem_llvm, obj, idx);
             ctx.builder.CreateStore(val, gep);
         }
+
     }
 
     void emit_instruction(CodegenContext &ctx, const mir::MirInstruction &inst) {
